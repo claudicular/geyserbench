@@ -137,12 +137,14 @@ async fn process_influxdb_endpoint(
                 // - measurement is "fast_geyser_latency"
                 // - stage matches the configured stage
                 // - _time is after our last query time
+                // Note: stage is a field, not a tag, so we must filter after pivot
+                // This is less efficient than tag-based filtering but works with current schema
                 let query_str = format!(
                     r#"from(bucket: "{bucket}")
   |> range(start: {last_time})
   |> filter(fn: (r) => r._measurement == "fast_geyser_latency")
-  |> filter(fn: (r) => r.stage == "{stage}")
   |> pivot(rowKey:["_time"], columnKey: ["_field"], valueColumn: "_value")
+  |> filter(fn: (r) => r.stage == "{stage}")
   |> filter(fn: (r) => exists r.tx_signature and exists r.timestamp_us)
   |> keep(columns: ["_time", "tx_signature", "timestamp_us"])
   |> sort(columns: ["_time"])"#,
