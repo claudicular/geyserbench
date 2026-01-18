@@ -293,7 +293,16 @@ async fn process_influxdb_endpoint(
                             }
 
                             // Use the timestamp_us field from the record as the observation time
+                            // This is required - we do not fall back to _time
                             let influx_timestamp_us = record.timestamp_us;
+                            if influx_timestamp_us == 0 {
+                                error!(
+                                    endpoint = %endpoint_name,
+                                    signature = %signature,
+                                    "Record missing valid timestamp_us - this field is required for latency comparison"
+                                );
+                                continue;
+                            }
                             let influx_timestamp_secs = influx_timestamp_us as f64 / 1_000_000.0;
 
                             // Calculate elapsed_since_start using InfluxDB timestamp
