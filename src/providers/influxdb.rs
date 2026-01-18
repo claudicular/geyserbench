@@ -238,17 +238,10 @@ async fn process_influxdb_endpoint(
         error!(endpoint = %endpoint_name, error = ?e, "Diagnostic failed");
     }
 
-    // Track the last timestamp we've seen to avoid duplicates (as RFC3339 for Flux queries)
-    let start_datetime = chrono::DateTime::from_timestamp(
-        start_wallclock_secs as i64,
-        ((start_wallclock_secs.fract()) * 1_000_000_000.0) as u32,
-    )
-    .unwrap_or_else(|| chrono::Utc::now().into());
-    let mut last_query_time = start_datetime.to_rfc3339();
     let mut accumulator = TransactionAccumulator::new();
     let mut transaction_count = 0usize;
 
-    info!(endpoint = %endpoint_name, start_time = %last_query_time, "Connected to InfluxDB, starting poll loop");
+    info!(endpoint = %endpoint_name, "Connected to InfluxDB, starting poll loop with -15s lookback window");
 
     loop {
         tokio::select! { biased;
@@ -258,14 +251,12 @@ async fn process_influxdb_endpoint(
             }
 
             _ = tokio::time::sleep(Duration::from_millis(100)) => {
-                // Build Flux query to get new signatures since last query
-                // We query for records where:
-                // - measurement is "fast_geyser_latency"
-                // - stage matches the configured stage (tag, filtered before pivot for efficiency)
-                // - _time is after our last query time
+                // Build Flux query with fixed lookback window
+                // Using -15s to catch batched writes (InfluxDB producer may batch every ~10s)
+                // Deduplication is handled by TransactionAccumulator
                 let query_str = format!(
                     r#"from(bucket: "{bucket}")
-  |> range(start: {last_time})
+  |> range(start: -15s)
   |> filter(fn: (r) => r._measurement == "fast_geyser_latency")
   |> filter(fn: (r) => r.stage == "{stage}")
   |> pivot(rowKey:["_time"], columnKey: ["_field"], valueColumn: "_value")
@@ -274,7 +265,6 @@ async fn process_influxdb_endpoint(
   |> sort(columns: ["_time"])"#,
                     bucket = bucket,
                     stage = stage,
-                    last_time = last_query_time,
                 );
 
                 debug!(endpoint = %endpoint_name, query = %query_str, "Executing InfluxDB query");
@@ -305,12 +295,6 @@ async fn process_influxdb_endpoint(
                             // Use the timestamp_us field from the record as the observation time
                             let influx_timestamp_us = record.timestamp_us;
                             let influx_timestamp_secs = influx_timestamp_us as f64 / 1_000_000.0;
-
-                            // Update last query time to avoid re-processing
-                            // Use the record's _time field directly (already RFC3339)
-                            if !record.time.is_empty() && record.time > last_query_time {
-                                last_query_time = record.time.clone();
-                            }
 
                             // Calculate elapsed_since_start using InfluxDB timestamp
                             // This is the key difference from other providers:
