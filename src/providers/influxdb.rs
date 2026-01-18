@@ -4,7 +4,7 @@ use influxdb2::Client;
 use influxdb2::models::Query;
 use influxdb2_structmap::FromMap;
 use tokio::task;
-use tracing::{info, warn};
+use tracing::{debug, info, warn};
 
 use crate::{
     config::{Config, Endpoint},
@@ -151,13 +151,29 @@ async fn process_influxdb_endpoint(
                     last_time = last_query_time,
                 );
 
+                debug!(endpoint = %endpoint_name, query = %query_str, "Executing InfluxDB query");
+
                 let query = Query::new(query_str);
 
                 match client.query::<InfluxRecord>(Some(query)).await {
                     Ok(records) => {
+                        let record_count = records.len();
+                        if record_count > 0 {
+                            debug!(endpoint = %endpoint_name, record_count, "Received records from InfluxDB");
+                        }
+
                         for record in records {
+                            debug!(
+                                endpoint = %endpoint_name,
+                                time = %record.time,
+                                signature = %record.tx_signature,
+                                timestamp_us = record.timestamp_us,
+                                "Processing InfluxDB record"
+                            );
+
                             let signature = record.tx_signature;
                             if signature.is_empty() {
+                                debug!(endpoint = %endpoint_name, "Skipping record with empty signature");
                                 continue;
                             }
 
