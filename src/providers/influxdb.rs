@@ -4,7 +4,7 @@ use influxdb2::Client;
 use influxdb2::models::Query;
 use influxdb2_structmap::FromMap;
 use tokio::task;
-use tracing::{debug, info, warn};
+use tracing::{debug, info, warn, error};
 
 use crate::{
     config::{Config, Endpoint},
@@ -61,6 +61,70 @@ impl FromMap for InfluxRecord {
     }
 }
 
+/// Diagnostic function to test InfluxDB connectivity and query parsing
+/// Uses a simple -1m range that should always return results
+async fn run_influxdb_diagnostic(
+    client: &Client,
+    bucket: &str,
+    stage: &str,
+    endpoint_name: &str,
+) -> Result<(), Box<dyn Error + Send + Sync>> {
+    info!(endpoint = %endpoint_name, "=== INFLUXDB DIAGNOSTIC START ===");
+
+    let diagnostic_query = format!(
+        r#"from(bucket: "{bucket}")
+  |> range(start: -1m)
+  |> filter(fn: (r) => r._measurement == "fast_geyser_latency")
+  |> filter(fn: (r) => r.stage == "{stage}")
+  |> pivot(rowKey:["_time"], columnKey: ["_field"], valueColumn: "_value")
+  |> filter(fn: (r) => exists r.tx_signature and exists r.timestamp_us)
+  |> keep(columns: ["_time", "tx_signature", "timestamp_us"])
+  |> sort(columns: ["_time"])
+  |> limit(n: 10)"#,
+        bucket = bucket,
+        stage = stage,
+    );
+
+    info!(endpoint = %endpoint_name, query = %diagnostic_query, "Diagnostic query (should return results with -1m range)");
+
+    let query = Query::new(diagnostic_query);
+
+    info!(endpoint = %endpoint_name, "Sending diagnostic query to InfluxDB...");
+
+    match client.query::<InfluxRecord>(Some(query)).await {
+        Ok(records) => {
+            let count = records.len();
+            info!(endpoint = %endpoint_name, record_count = count, "Diagnostic query returned");
+
+            if count == 0 {
+                warn!(endpoint = %endpoint_name, "Diagnostic returned 0 records - but -1m range should have data!");
+                warn!(endpoint = %endpoint_name, "This suggests the influxdb2 crate is not parsing the response correctly");
+            } else {
+                info!(endpoint = %endpoint_name, "Diagnostic SUCCESS - influxdb2 crate can parse responses");
+                for (i, record) in records.iter().enumerate().take(3) {
+                    info!(
+                        endpoint = %endpoint_name,
+                        index = i,
+                        time = %record.time,
+                        tx_signature = %record.tx_signature,
+                        timestamp_us = record.timestamp_us,
+                        "Sample record"
+                    );
+                }
+            }
+        }
+        Err(e) => {
+            error!(endpoint = %endpoint_name, error = ?e, "Diagnostic query FAILED with error");
+            error!(endpoint = %endpoint_name, error_display = %e, "Error display");
+        }
+    }
+
+    // Also try a raw query to see what InfluxDB actually returns
+    info!(endpoint = %endpoint_name, "=== INFLUXDB DIAGNOSTIC END ===");
+
+    Ok(())
+}
+
 async fn process_influxdb_endpoint(
     endpoint: Endpoint,
     _config: Config,
@@ -111,6 +175,11 @@ async fn process_influxdb_endpoint(
     );
 
     let client = Client::new(&endpoint.url, org, token);
+
+    // Run diagnostic before starting the main loop
+    if let Err(e) = run_influxdb_diagnostic(&client, bucket, stage, &endpoint_name).await {
+        error!(endpoint = %endpoint_name, error = ?e, "Diagnostic failed");
+    }
 
     // Track the last timestamp we've seen to avoid duplicates (as RFC3339 for Flux queries)
     let start_datetime = chrono::DateTime::from_timestamp(
