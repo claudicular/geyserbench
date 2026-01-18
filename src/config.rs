@@ -25,6 +25,12 @@ pub struct Endpoint {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub x_token: Option<String>,
     pub kind: EndpointKind,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub influx_org: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub influx_bucket: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub influx_stage: Option<String>,
 }
 
 fn default_true() -> bool {
@@ -48,6 +54,7 @@ pub enum EndpointKind {
     Shredstream,
     Shreder,
     Jetstream,
+    Influxdb,
 }
 
 #[derive(Debug, Clone, Copy, Default, Deserialize, Serialize)]
@@ -88,6 +95,7 @@ impl EndpointKind {
             EndpointKind::Shredstream => "shredstream",
             EndpointKind::Shreder => "shreder",
             EndpointKind::Jetstream => "jetstream",
+            EndpointKind::Influxdb => "influxdb",
         }
     }
 }
@@ -113,12 +121,18 @@ impl ConfigToml {
                     url: "http://fra.corvus-labs.io:10101".to_string(),
                     x_token: None,
                     kind: EndpointKind::Yellowstone,
+                    influx_org: None,
+                    influx_bucket: None,
+                    influx_stage: None,
                 },
                 Endpoint {
                     name: "arpc".to_string(),
                     url: "http://fra.corvus-labs.io:20202".to_string(),
                     x_token: None,
                     kind: EndpointKind::Arpc,
+                    influx_org: None,
+                    influx_bucket: None,
+                    influx_stage: None,
                 },
             ],
             backend: BackendSettings::default(),

@@ -50,7 +50,7 @@ Factory function `create_provider()` instantiates providers by `EndpointKind`. E
 - Receives a `ProviderContext` with shared state (comparator, counters, shutdown channel)
 - Streams transaction observations to `TransactionAccumulator`
 
-Supported providers: `yellowstone`, `arpc`, `thor`, `shredstream`, `shreder`, `jetstream`
+Supported providers: `yellowstone`, `arpc`, `thor`, `shredstream`, `shreder`, `jetstream`, `influxdb`
 
 ### Concurrency Model
 
@@ -82,6 +82,44 @@ url = "https://endpoint.url:port"
 kind = "yellowstone"                             # yellowstone | arpc | thor | shredstream | shreder | jetstream
 x_token = "optional-auth-token"
 ```
+
+## InfluxDB Provider for Latency Analysis
+
+The InfluxDB provider enables benchmarking geyser streams against specific instrumentation points in the Agave RPC pipeline. Unlike other providers that use current time when data is received, the InfluxDB provider uses the **logged timestamp** from InfluxDB as the observation time.
+
+### Configuration
+
+```toml
+[[endpoint]]
+name = "Agave Execution"
+url = "http://localhost:8086"          # InfluxDB URL
+kind = "influxdb"
+x_token = "your-influxdb-token"        # InfluxDB API token
+influx_org = "my-org"                  # InfluxDB organization
+influx_bucket = "solana-metrics"       # InfluxDB bucket
+influx_stage = "execution_complete"    # Stage to query
+```
+
+### Supported Stages
+
+The `fast_geyser_latency` measurement tracks transaction signatures at various Agave pipeline stages:
+- `entry_available` - Entry is available for processing
+- `replay_entries_received` - Replay entries received
+- `verification_complete` - Transaction verification complete
+- `accounts_locked` - Accounts locked for execution
+- `execution_complete` - Transaction execution complete
+- `geyser_notify` - Geyser notification sent
+
+### Timestamp Semantics
+
+| Provider Type | `wallclock_secs` | `elapsed_since_start` |
+|--------------|------------------|----------------------|
+| Geyser/gRPC | Current time when message received | `Instant::now() - start_instant` |
+| InfluxDB | InfluxDB logged timestamp | `influx_timestamp - start_wallclock_secs` |
+
+When comparing InfluxDB vs Geyser providers:
+- A negative delta means the pipeline stage occurred before Geyser received the notification (expected)
+- The magnitude shows how much latency exists between the pipeline stage and Geyser notification
 
 ## Key Dependencies
 
