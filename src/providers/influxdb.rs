@@ -158,8 +158,9 @@ async fn process_influxdb_endpoint(
                 match client.query::<InfluxRecord>(Some(query)).await {
                     Ok(records) => {
                         let record_count = records.len();
-                        if record_count > 0 {
-                            debug!(endpoint = %endpoint_name, record_count, "Received records from InfluxDB");
+                        debug!(endpoint = %endpoint_name, record_count, "Query completed");
+                        if record_count == 0 {
+                            debug!(endpoint = %endpoint_name, "No records returned - check if data exists for stage and time range");
                         }
 
                         for record in records {
