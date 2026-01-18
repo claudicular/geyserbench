@@ -112,12 +112,17 @@ async fn process_influxdb_endpoint(
 
     let client = Client::new(&endpoint.url, org, token);
 
-    // Track the last timestamp we've seen to avoid duplicates
-    let mut last_query_time_ns = (start_wallclock_secs * 1_000_000_000.0) as i64;
+    // Track the last timestamp we've seen to avoid duplicates (as RFC3339 for Flux queries)
+    let start_datetime = chrono::DateTime::from_timestamp(
+        start_wallclock_secs as i64,
+        ((start_wallclock_secs.fract()) * 1_000_000_000.0) as u32,
+    )
+    .unwrap_or_else(|| chrono::Utc::now().into());
+    let mut last_query_time = start_datetime.to_rfc3339();
     let mut accumulator = TransactionAccumulator::new();
     let mut transaction_count = 0usize;
 
-    info!(endpoint = %endpoint_name, "Connected to InfluxDB, starting poll loop");
+    info!(endpoint = %endpoint_name, start_time = %last_query_time, "Connected to InfluxDB, starting poll loop");
 
     loop {
         tokio::select! { biased;
@@ -134,7 +139,7 @@ async fn process_influxdb_endpoint(
                 // - _time is after our last query time
                 let query_str = format!(
                     r#"from(bucket: "{bucket}")
-  |> range(start: {last_time_ns})
+  |> range(start: {last_time})
   |> filter(fn: (r) => r._measurement == "fast_geyser_latency")
   |> filter(fn: (r) => r.stage == "{stage}")
   |> pivot(rowKey:["_time"], columnKey: ["_field"], valueColumn: "_value")
@@ -143,7 +148,7 @@ async fn process_influxdb_endpoint(
   |> sort(columns: ["_time"])"#,
                     bucket = bucket,
                     stage = stage,
-                    last_time_ns = last_query_time_ns,
+                    last_time = last_query_time,
                 );
 
                 let query = Query::new(query_str);
@@ -161,12 +166,9 @@ async fn process_influxdb_endpoint(
                             let influx_timestamp_secs = influx_timestamp_us as f64 / 1_000_000.0;
 
                             // Update last query time to avoid re-processing
-                            // Parse the _time field (RFC3339) to get nanoseconds
-                            if let Ok(parsed_time) = chrono::DateTime::parse_from_rfc3339(&record.time) {
-                                let time_ns = parsed_time.timestamp_nanos_opt().unwrap_or(last_query_time_ns);
-                                if time_ns > last_query_time_ns {
-                                    last_query_time_ns = time_ns;
-                                }
+                            // Use the record's _time field directly (already RFC3339)
+                            if !record.time.is_empty() && record.time > last_query_time {
+                                last_query_time = record.time.clone();
                             }
 
                             // Calculate elapsed_since_start using InfluxDB timestamp
