@@ -1,10 +1,8 @@
 use std::{error::Error, sync::atomic::Ordering, time::Duration};
 
-use influxdb2::Client;
-use influxdb2::models::Query;
-use influxdb2_structmap::FromMap;
+use reqwest::Client;
 use tokio::task;
-use tracing::{debug, info, warn, error};
+use tracing::{debug, error, info, warn};
 
 use crate::{
     config::{Config, Endpoint},
@@ -38,33 +36,99 @@ struct InfluxRecord {
     timestamp_us: i64,
 }
 
-impl FromMap for InfluxRecord {
-    fn from_genericmap(map: influxdb2_structmap::GenericMap) -> Self {
-        let mut record = InfluxRecord::default();
+/// Parse InfluxDB CSV response into records
+/// InfluxDB annotated CSV format has:
+/// - Lines starting with # are annotations (metadata)
+/// - Empty lines separate tables
+/// - Header row with column names
+/// - Data rows
+fn parse_influx_csv(csv_text: &str) -> Vec<InfluxRecord> {
+    let mut records = Vec::new();
+    let mut headers: Vec<String> = Vec::new();
+    let mut in_data_section = false;
 
-        if let Some(influxdb2_structmap::value::Value::String(v)) = map.get("_time") {
-            record.time = v.clone();
-        }
-        if let Some(influxdb2_structmap::value::Value::String(v)) = map.get("tx_signature") {
-            record.tx_signature = v.clone();
-        }
-        if let Some(v) = map.get("timestamp_us") {
-            record.timestamp_us = match v {
-                influxdb2_structmap::value::Value::Long(n) => *n,
-                influxdb2_structmap::value::Value::Double(n) => n.into_inner() as i64,
-                influxdb2_structmap::value::Value::UnsignedLong(n) => *n as i64,
-                _ => 0,
-            };
+    for line in csv_text.lines() {
+        // Skip empty lines
+        if line.is_empty() {
+            in_data_section = false;
+            headers.clear();
+            continue;
         }
 
-        record
+        // Skip annotation lines (start with #)
+        if line.starts_with('#') {
+            continue;
+        }
+
+        // Parse as CSV
+        let fields: Vec<&str> = line.split(',').collect();
+
+        if !in_data_section {
+            // This is a header row
+            headers = fields.iter().map(|s| s.to_string()).collect();
+            in_data_section = true;
+            continue;
+        }
+
+        // This is a data row - find our columns
+        let time_idx = headers.iter().position(|h| h == "_time");
+        let sig_idx = headers.iter().position(|h| h == "tx_signature");
+        let ts_idx = headers.iter().position(|h| h == "timestamp_us");
+
+        if let (Some(time_idx), Some(sig_idx), Some(ts_idx)) = (time_idx, sig_idx, ts_idx) {
+            if fields.len() > time_idx && fields.len() > sig_idx && fields.len() > ts_idx {
+                let timestamp_us = fields[ts_idx].parse::<i64>().unwrap_or(0);
+
+                records.push(InfluxRecord {
+                    time: fields[time_idx].to_string(),
+                    tx_signature: fields[sig_idx].to_string(),
+                    timestamp_us,
+                });
+            }
+        }
     }
+
+    records
+}
+
+/// Query InfluxDB using raw HTTP API
+async fn query_influxdb(
+    client: &Client,
+    url: &str,
+    org: &str,
+    token: &str,
+    query: &str,
+) -> Result<Vec<InfluxRecord>, Box<dyn Error + Send + Sync>> {
+    let query_url = format!("{}/api/v2/query?org={}", url.trim_end_matches('/'), org);
+
+    let response = client
+        .post(&query_url)
+        .header("Authorization", format!("Token {}", token))
+        .header("Content-Type", "application/vnd.flux")
+        .header("Accept", "application/csv")
+        .body(query.to_string())
+        .send()
+        .await?;
+
+    if !response.status().is_success() {
+        let status = response.status();
+        let body = response.text().await.unwrap_or_default();
+        return Err(format!("InfluxDB query failed with status {}: {}", status, body).into());
+    }
+
+    let csv_text = response.text().await?;
+    debug!(csv_length = csv_text.len(), "Received CSV response from InfluxDB");
+
+    let records = parse_influx_csv(&csv_text);
+    Ok(records)
 }
 
 /// Diagnostic function to test InfluxDB connectivity and query parsing
-/// Uses a simple -1m range that should always return results
 async fn run_influxdb_diagnostic(
     client: &Client,
+    url: &str,
+    org: &str,
+    token: &str,
     bucket: &str,
     stage: &str,
     endpoint_name: &str,
@@ -86,21 +150,17 @@ async fn run_influxdb_diagnostic(
     );
 
     info!(endpoint = %endpoint_name, query = %diagnostic_query, "Diagnostic query (should return results with -1m range)");
-
-    let query = Query::new(diagnostic_query);
-
     info!(endpoint = %endpoint_name, "Sending diagnostic query to InfluxDB...");
 
-    match client.query::<InfluxRecord>(Some(query)).await {
+    match query_influxdb(client, url, org, token, &diagnostic_query).await {
         Ok(records) => {
             let count = records.len();
             info!(endpoint = %endpoint_name, record_count = count, "Diagnostic query returned");
 
             if count == 0 {
-                warn!(endpoint = %endpoint_name, "Diagnostic returned 0 records - but -1m range should have data!");
-                warn!(endpoint = %endpoint_name, "This suggests the influxdb2 crate is not parsing the response correctly");
+                warn!(endpoint = %endpoint_name, "Diagnostic returned 0 records - check if data exists for this stage");
             } else {
-                info!(endpoint = %endpoint_name, "Diagnostic SUCCESS - influxdb2 crate can parse responses");
+                info!(endpoint = %endpoint_name, "Diagnostic SUCCESS - InfluxDB queries working");
                 for (i, record) in records.iter().enumerate().take(3) {
                     info!(
                         endpoint = %endpoint_name,
@@ -114,14 +174,11 @@ async fn run_influxdb_diagnostic(
             }
         }
         Err(e) => {
-            error!(endpoint = %endpoint_name, error = ?e, "Diagnostic query FAILED with error");
-            error!(endpoint = %endpoint_name, error_display = %e, "Error display");
+            error!(endpoint = %endpoint_name, error = ?e, "Diagnostic query FAILED");
         }
     }
 
-    // Also try a raw query to see what InfluxDB actually returns
     info!(endpoint = %endpoint_name, "=== INFLUXDB DIAGNOSTIC END ===");
-
     Ok(())
 }
 
@@ -174,10 +231,10 @@ async fn process_influxdb_endpoint(
         "Connecting to InfluxDB"
     );
 
-    let client = Client::new(&endpoint.url, org, token);
+    let client = Client::new();
 
     // Run diagnostic before starting the main loop
-    if let Err(e) = run_influxdb_diagnostic(&client, bucket, stage, &endpoint_name).await {
+    if let Err(e) = run_influxdb_diagnostic(&client, &endpoint.url, org, token, bucket, stage, &endpoint_name).await {
         error!(endpoint = %endpoint_name, error = ?e, "Diagnostic failed");
     }
 
@@ -222,9 +279,7 @@ async fn process_influxdb_endpoint(
 
                 debug!(endpoint = %endpoint_name, query = %query_str, "Executing InfluxDB query");
 
-                let query = Query::new(query_str);
-
-                match client.query::<InfluxRecord>(Some(query)).await {
+                match query_influxdb(&client, &endpoint.url, org, token, &query_str).await {
                     Ok(records) => {
                         let record_count = records.len();
                         debug!(endpoint = %endpoint_name, record_count, "Query completed");
