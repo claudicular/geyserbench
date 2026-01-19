@@ -241,7 +241,7 @@ async fn process_influxdb_endpoint(
     let mut accumulator = TransactionAccumulator::new();
     let mut transaction_count = 0usize;
 
-    info!(endpoint = %endpoint_name, "Connected to InfluxDB, starting poll loop with -15s lookback window");
+    info!(endpoint = %endpoint_name, "Connected to InfluxDB, starting poll loop with -30s lookback window");
 
     loop {
         tokio::select! { biased;
@@ -252,11 +252,11 @@ async fn process_influxdb_endpoint(
 
             _ = tokio::time::sleep(Duration::from_millis(100)) => {
                 // Build Flux query with fixed lookback window
-                // Using -15s to catch batched writes (InfluxDB producer may batch every ~10s)
+                // Using -30s to catch batched writes (InfluxDB producer may batch every ~10s)
                 // Deduplication is handled by TransactionAccumulator
                 let query_str = format!(
                     r#"from(bucket: "{bucket}")
-  |> range(start: -15s)
+  |> range(start: -30s)
   |> filter(fn: (r) => r._measurement == "fast_geyser_latency")
   |> filter(fn: (r) => r.stage == "{stage}")
   |> pivot(rowKey:["_time"], columnKey: ["_field"], valueColumn: "_value")
