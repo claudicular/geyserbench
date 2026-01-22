@@ -129,3 +129,8 @@ When comparing InfluxDB vs Geyser providers:
 - **crossbeam-queue** - Lock-free queue for signature forwarding
 - **comfy-table** - CLI table rendering
 - **tracing** - Structured logging (configure via `RUST_LOG` env var)
+
+
+## Plans
+- at the end of each plan, give me a list of unresolved questions to answer, if any.
+- choose plan names according to what they're about. use three/four words with hyphens.
