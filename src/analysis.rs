@@ -17,6 +17,12 @@ fn table_preset() -> &'static str {
 use std::collections::HashMap;
 use std::time::Duration;
 
+#[derive(Debug, Clone)]
+pub struct EndpointDescriptor {
+    pub name: String,
+    pub mode: String,
+}
+
 #[derive(Default)]
 pub struct EndpointStats {
     pub total_observations: usize,
@@ -28,6 +34,7 @@ pub struct EndpointStats {
 #[derive(Debug, Default, Clone)]
 pub struct EndpointSummary {
     pub name: String,
+    pub mode: String,
     pub first_share: f64,
     pub p50_delay_ms: Option<f64>,
     pub p95_delay_ms: Option<f64>,
@@ -46,14 +53,21 @@ pub struct RunSummary {
     pub backfill_signatures: usize,
 }
 
-pub fn compute_run_summary(comparator: &Comparator, endpoint_names: &[String]) -> RunSummary {
+pub fn compute_run_summary(
+    comparator: &Comparator,
+    endpoints: &[EndpointDescriptor],
+) -> RunSummary {
     let mut endpoint_stats: HashMap<String, EndpointStats> = HashMap::new();
-    let expected_producers = endpoint_names.len();
+    let endpoint_modes: HashMap<String, String> = endpoints
+        .iter()
+        .map(|endpoint| (endpoint.name.clone(), endpoint.mode.clone()))
+        .collect();
+    let expected_producers = endpoints.len();
     let mut total_signatures = 0usize;
     let mut backfill_signatures = 0usize;
 
-    for endpoint_name in endpoint_names {
-        endpoint_stats.insert(endpoint_name.clone(), EndpointStats::default());
+    for endpoint in endpoints {
+        endpoint_stats.insert(endpoint.name.clone(), EndpointStats::default());
     }
 
     for sig_entry in comparator.iter() {
@@ -102,7 +116,13 @@ pub fn compute_run_summary(comparator: &Comparator, endpoint_names: &[String]) -
 
     let endpoints: Vec<EndpointSummary> = endpoint_stats
         .into_iter()
-        .map(|(endpoint, stats)| build_summary(endpoint, stats, total_signatures))
+        .map(|(endpoint, stats)| {
+            let mode = endpoint_modes
+                .get(&endpoint)
+                .cloned()
+                .unwrap_or_else(|| "unknown".to_string());
+            build_summary(endpoint, mode, stats, total_signatures)
+        })
         .collect();
 
     let has_data = total_signatures > 0;
@@ -149,15 +169,18 @@ pub fn display_run_summary(summary: &RunSummary) {
 
             if is_fastest {
                 println!(
-                    "{}: Win rate {}, p50 0.00ms (fastest)",
-                    summary.name, win_rate,
+                    "{} [{}]: Win rate {}, p50 0.00ms (fastest)",
+                    summary.name, summary.mode, win_rate,
                 );
             } else {
                 let p50_delay = summary
                     .p50_delay_ms
                     .map(|v| format!("{:.2}ms", v))
                     .unwrap_or_else(|| "—".to_string());
-                println!("{}: Win rate {}, p50 {}", summary.name, win_rate, p50_delay);
+                println!(
+                    "{} [{}]: Win rate {}, p50 {}",
+                    summary.name, summary.mode, win_rate, p50_delay
+                );
             }
         }
     }
@@ -177,12 +200,14 @@ pub fn display_run_summary(summary: &RunSummary) {
     table.load_preset(table_preset());
     table.set_content_arrangement(ContentArrangement::Dynamic);
     table.set_header(vec![
-        "Endpoint", "First %", "P50 ms", "P95 ms", "P99 ms", "Valid Tx", "Firsts", "Backfill",
+        "Endpoint", "Mode", "First %", "P50 ms", "P95 ms", "P99 ms", "Valid Tx", "Firsts",
+        "Backfill",
     ]);
 
     for summary in table_rows {
         table.add_row(vec![
             summary.name.clone(),
+            summary.mode.clone(),
             format_percent(summary.first_share),
             format_latency_value(summary.p50_delay_ms),
             format_latency_value(summary.p95_delay_ms),
@@ -200,6 +225,7 @@ pub fn build_metrics_report(summary: &RunSummary) -> Value {
     let mut per_endpoint = Map::new();
     for endpoint in &summary.endpoints {
         let payload = json!({
+            "mode": endpoint.mode,
             "first_detection_rate": endpoint.first_share,
             "p50_latency_ms": endpoint.p50_delay_ms,
             "p95_latency_ms": endpoint.p95_delay_ms,
@@ -227,11 +253,13 @@ fn diff_ms(tx: &TransactionData, first_tx: &TransactionData) -> f64 {
 
 fn build_summary(
     endpoint: String,
+    mode: String,
     stats: EndpointStats,
     total_signatures: usize,
 ) -> EndpointSummary {
     let mut summary = EndpointSummary {
         name: endpoint,
+        mode,
         valid_transactions: stats.total_observations,
         first_detections: stats.first_detections,
         backfill_transactions: stats.backfill_transactions,

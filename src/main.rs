@@ -204,7 +204,14 @@ async fn main() -> Result<()> {
     }
 
     let mut handles = Vec::new();
-    let endpoint_names: Vec<String> = config.endpoint.iter().map(|e| e.name.clone()).collect();
+    let endpoint_descriptors: Vec<analysis::EndpointDescriptor> = config
+        .endpoint
+        .iter()
+        .map(|endpoint| analysis::EndpointDescriptor {
+            name: endpoint.name.clone(),
+            mode: endpoint.kind.as_str().to_string(),
+        })
+        .collect();
     let global_target = if config.config.transactions > 0 {
         Some(config.config.transactions as usize)
     } else {
@@ -270,7 +277,7 @@ async fn main() -> Result<()> {
     let run_summary = if !run_aborted {
         Some(analysis::compute_run_summary(
             comparator.as_ref(),
-            &endpoint_names,
+            &endpoint_descriptors,
         ))
     } else {
         None

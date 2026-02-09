@@ -11,9 +11,7 @@ use crate::{
 
 use super::{
     GeyserProvider, ProviderContext,
-    common::{
-        TransactionAccumulator, build_signature_envelope, enqueue_signature,
-    },
+    common::{TransactionAccumulator, build_signature_envelope, enqueue_signature},
 };
 
 pub struct InfluxdbProvider;
@@ -117,7 +115,10 @@ async fn query_influxdb(
     }
 
     let csv_text = response.text().await?;
-    debug!(csv_length = csv_text.len(), "Received CSV response from InfluxDB");
+    debug!(
+        csv_length = csv_text.len(),
+        "Received CSV response from InfluxDB"
+    );
 
     let records = parse_influx_csv(&csv_text);
     Ok(records)
@@ -234,7 +235,17 @@ async fn process_influxdb_endpoint(
     let client = Client::new();
 
     // Run diagnostic before starting the main loop
-    if let Err(e) = run_influxdb_diagnostic(&client, &endpoint.url, org, token, bucket, stage, &endpoint_name).await {
+    if let Err(e) = run_influxdb_diagnostic(
+        &client,
+        &endpoint.url,
+        org,
+        token,
+        bucket,
+        stage,
+        &endpoint_name,
+    )
+    .await
+    {
         error!(endpoint = %endpoint_name, error = ?e, "Diagnostic failed");
     }
 

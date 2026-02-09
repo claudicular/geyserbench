@@ -116,6 +116,7 @@ async fn process_yellowstone_endpoint(
             entry: HashMap::default(),
             blocks: HashMap::default(),
             blocks_meta: HashMap::default(),
+            transaction_accounts: HashMap::default(),
             commitment: Some(commitment as i32),
             accounts_data_slice: Vec::default(),
             ping: None,
