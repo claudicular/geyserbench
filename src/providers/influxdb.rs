@@ -327,6 +327,7 @@ async fn process_influxdb_endpoint(
                                 wallclock_secs: influx_timestamp_secs,
                                 elapsed_since_start: elapsed,
                                 start_wallclock_secs,
+                                slot: None,
                             };
 
                             let updated = accumulator.record(signature.clone(), tx_data.clone());

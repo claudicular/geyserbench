@@ -7,8 +7,8 @@ use crate::{
 
 use futures_util::StreamExt;
 use solana_pubkey::Pubkey;
-use thorstreamer_grpc_client::{ClientConfig, ThorClient, parse_message};
 use thorstreamer_grpc_client::proto::thor_streamer::types::message_wrapper::EventMessage;
+use thorstreamer_grpc_client::{ClientConfig, ThorClient, parse_message};
 use tokio::task;
 use tracing::{Level, info};
 
@@ -119,6 +119,7 @@ async fn process_thor_endpoint(
                         wallclock_secs: wallclock,
                         elapsed_since_start: elapsed,
                         start_wallclock_secs,
+                        slot: None,
                     };
 
                     let updated = accumulator.record(

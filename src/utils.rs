@@ -3,9 +3,13 @@ use std::{
     collections::HashMap,
     fs::OpenOptions,
     io::Write,
-    sync::atomic::{AtomicUsize, Ordering},
+    sync::{
+        Mutex,
+        atomic::{AtomicUsize, Ordering},
+    },
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
+use tokio::sync::mpsc::UnboundedSender;
 use tracing::{info, warn};
 
 #[derive(Debug, Clone)]
@@ -13,12 +17,21 @@ pub struct TransactionData {
     pub wallclock_secs: f64,
     pub elapsed_since_start: Duration,
     pub start_wallclock_secs: f64,
+    pub slot: Option<u64>,
+}
+
+/// Snapshot emitted when a signature has been observed by every endpoint.
+#[derive(Debug, Clone)]
+pub struct CompleteObservation {
+    pub signature: String,
+    pub observations: HashMap<String, TransactionData>,
 }
 
 #[derive(Debug)]
 pub struct Comparator {
     data: DashMap<String, HashMap<String, TransactionData>>,
     emitted: DashSet<String>,
+    sink: Mutex<Option<UnboundedSender<CompleteObservation>>>,
 }
 
 impl Comparator {
@@ -26,7 +39,17 @@ impl Comparator {
         Self {
             data: DashMap::new(),
             emitted: DashSet::new(),
+            sink: Mutex::new(None),
         }
+    }
+
+    pub fn set_sink(&self, sender: UnboundedSender<CompleteObservation>) {
+        *self.sink.lock().unwrap() = Some(sender);
+    }
+
+    /// Drops the sink sender so the receiving task can drain and exit.
+    pub fn close_sink(&self) {
+        self.sink.lock().unwrap().take();
     }
 
     pub fn add_batch(&self, from: &str, transactions: HashMap<String, TransactionData>) {
@@ -75,6 +98,12 @@ impl Comparator {
         drop(entry);
 
         if self.emitted.insert(signature.to_owned()) {
+            if let Some(sender) = self.sink.lock().unwrap().as_ref() {
+                let _ = sender.send(CompleteObservation {
+                    signature: signature.to_owned(),
+                    observations: snapshot.clone(),
+                });
+            }
             Some(snapshot)
         } else {
             None

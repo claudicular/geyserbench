@@ -9,6 +9,10 @@ pub struct ConfigToml {
     pub endpoint: Vec<Endpoint>,
     #[serde(default)]
     pub backend: BackendSettings,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub validator_map: Option<ValidatorMapSettings>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub influx_sink: Option<InfluxSinkSettings>,
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
@@ -16,6 +20,60 @@ pub struct Config {
     pub transactions: i32,
     pub account: String,
     pub commitment: ArgsCommitment,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rpc_url: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub duration_secs: Option<u64>,
+}
+
+/// Validator location input in the PersistedRttMap v1 format (see docs/validator-map.md).
+/// `source` is a filesystem path or an http(s) URL.
+#[derive(Debug, Deserialize, Serialize, Clone)]
+pub struct ValidatorMapSettings {
+    pub source: String,
+    #[serde(default = "default_icmp_threshold_us")]
+    pub rtt_icmp_threshold_us: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rtt_quic_threshold_us: Option<u64>,
+    #[serde(default = "default_map_refresh_secs")]
+    pub refresh_secs: u64,
+}
+
+impl ValidatorMapSettings {
+    pub fn quic_threshold_us(&self) -> u64 {
+        self.rtt_quic_threshold_us
+            .unwrap_or(self.rtt_icmp_threshold_us + 1_000)
+    }
+}
+
+fn default_icmp_threshold_us() -> u64 {
+    5_000
+}
+
+fn default_map_refresh_secs() -> u64 {
+    300
+}
+
+/// Long-running metrics export: per-(leader, endpoint) window counters written
+/// to InfluxDB v2 as line protocol.
+#[derive(Debug, Deserialize, Serialize, Clone)]
+pub struct InfluxSinkSettings {
+    pub url: String,
+    pub org: String,
+    pub bucket: String,
+    pub token: String,
+    #[serde(default = "default_sink_measurement")]
+    pub measurement: String,
+    #[serde(default = "default_flush_interval_secs")]
+    pub flush_interval_secs: u64,
+}
+
+fn default_sink_measurement() -> String {
+    "geyserbench_vs_winner".to_string()
+}
+
+fn default_flush_interval_secs() -> u64 {
+    15
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
@@ -117,6 +175,8 @@ impl ConfigToml {
                 transactions: 1000,
                 account: "pAMMBay6oceH9fJKBRHGP5D4bD4sWpmSwMn52FMfXEA".to_string(),
                 commitment: ArgsCommitment::Processed,
+                rpc_url: None,
+                duration_secs: None,
             },
             endpoint: vec![
                 Endpoint {
@@ -139,6 +199,8 @@ impl ConfigToml {
                 },
             ],
             backend: BackendSettings::default(),
+            validator_map: None,
+            influx_sink: None,
         };
 
         let toml_string = toml::to_string_pretty(&default_config)

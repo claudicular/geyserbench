@@ -156,6 +156,7 @@ async fn process_yellowstone_tx_accounts_endpoint(
                                     wallclock_secs: wallclock,
                                     elapsed_since_start: elapsed,
                                     start_wallclock_secs,
+                                    slot: Some(tx_msg.slot),
                                 };
 
                                 let updated = accumulator.record(signature.clone(), tx_data.clone());

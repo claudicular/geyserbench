@@ -166,6 +166,7 @@ async fn process_yellowstone_endpoint(
                                                 wallclock_secs: wallclock,
                                                 elapsed_since_start: elapsed,
                                                 start_wallclock_secs,
+                                                slot: Some(tx_msg.slot),
                                             };
 
                                             let updated = accumulator.record(

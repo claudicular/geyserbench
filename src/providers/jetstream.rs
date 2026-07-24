@@ -129,6 +129,7 @@ async fn process_jetstream_endpoint(
                     wallclock_secs: wallclock,
                     elapsed_since_start: elapsed,
                     start_wallclock_secs,
+                    slot: Some(tx.slot),
                 };
 
                 let updated = accumulator.record(signature.clone(), tx_data.clone());

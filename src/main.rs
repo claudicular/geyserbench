@@ -18,8 +18,10 @@ pub use {
 mod analysis;
 mod backend;
 mod config;
+mod leader;
 mod proto;
 mod providers;
+mod sink;
 mod utils;
 
 use anyhow::{Result, anyhow};
@@ -94,6 +96,30 @@ async fn main() -> Result<()> {
     let config = config::ConfigToml::load_or_create(config_path)?;
     info!(config_path = config_path, "Loaded configuration");
 
+    let duration_mode = config.config.duration_secs.is_some();
+
+    let leader_resolver = config
+        .config
+        .rpc_url
+        .clone()
+        .map(|url| Arc::new(leader::LeaderResolver::new(url)));
+    if let Some(resolver) = leader_resolver.as_ref() {
+        resolver.prefetch_current().await;
+    }
+
+    let validator_map = config
+        .validator_map
+        .clone()
+        .map(|settings| Arc::new(leader::ValidatorMap::new(settings)));
+    if let Some(map) = validator_map.as_ref() {
+        map.load().await;
+        if leader_resolver.is_none() {
+            warn!(
+                "validator_map configured without config.rpc_url; leaders cannot be resolved so region classification will be unused"
+            );
+        }
+    }
+
     let (shutdown_tx, _) = broadcast::channel::<()>(1);
 
     let start_time_local = get_current_timestamp();
@@ -114,8 +140,15 @@ async fn main() -> Result<()> {
         );
     }
 
+    if duration_mode {
+        info!(
+            duration_secs = config.config.duration_secs,
+            "Duration mode: transaction target ignored, backend streaming disabled"
+        );
+    }
+
     let mut backend_settings = config.backend.clone();
-    backend_settings.enabled = !(cli.disable_streaming || high_transaction_volume);
+    backend_settings.enabled = !(cli.disable_streaming || high_transaction_volume || duration_mode);
     backend_settings.url = Some(DEFAULT_BACKEND_STREAM_URL.to_string());
 
     let mut backend_handle = None;
@@ -212,12 +245,38 @@ async fn main() -> Result<()> {
             mode: endpoint.kind.as_str().to_string(),
         })
         .collect();
-    let global_target = if config.config.transactions > 0 {
+    let global_target = if duration_mode {
+        None
+    } else if config.config.transactions > 0 {
         Some(config.config.transactions as usize)
     } else {
         None
     };
     let progress_tracker = global_target.map(|target| Arc::new(ProgressTracker::new(target)));
+
+    let mut sink_handle = None;
+    if let Some(sink_settings) = config.influx_sink.clone() {
+        let (sink_tx, sink_rx) = tokio::sync::mpsc::unbounded_channel();
+        comparator.set_sink(sink_tx);
+        sink_handle = Some(sink::spawn_influx_sink(
+            sink_settings,
+            leader_resolver.clone(),
+            validator_map.clone(),
+            sink_rx,
+        ));
+    }
+
+    if let Some(duration_secs) = config.config.duration_secs {
+        let shutdown_for_timer = shutdown_tx.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_secs(duration_secs)).await;
+            info!(
+                duration_secs,
+                "Benchmark duration elapsed; broadcasting shutdown"
+            );
+            let _ = shutdown_for_timer.send(());
+        });
+    }
 
     let total_producers = config.endpoint.len();
     for (index, endpoint) in config.endpoint.clone().into_iter().enumerate() {
@@ -250,11 +309,17 @@ async fn main() -> Result<()> {
         async move {
             match ctrl_c().await {
                 Ok(()) => {
-                    let already_aborting = aborted.swap(true, Ordering::AcqRel);
-                    if already_aborting {
-                        info!("Received additional Ctrl+C; shutdown already in progress");
+                    if duration_mode {
+                        // Long-running benches keep their results on interrupt:
+                        // finalize early instead of aborting.
+                        info!("Received Ctrl+C; finishing duration run early");
                     } else {
-                        info!("Received Ctrl+C; initiating shutdown");
+                        let already_aborting = aborted.swap(true, Ordering::AcqRel);
+                        if already_aborting {
+                            info!("Received additional Ctrl+C; shutdown already in progress");
+                        } else {
+                            info!("Received Ctrl+C; initiating shutdown");
+                        }
                     }
                     shared_shutdown.store(true, Ordering::Release);
                     let _ = shutdown_tx.send(());
@@ -270,6 +335,13 @@ async fn main() -> Result<()> {
             Ok(Err(e)) => error!(error = ?e, "Provider task returned error"),
             Err(e) => error!(error = ?e, "Provider join error"),
         }
+    }
+
+    comparator.close_sink();
+    if let Some(handle) = sink_handle
+        && let Err(err) = handle.await
+    {
+        warn!(error = ?err, "InfluxDB sink task join error");
     }
 
     let run_aborted = aborted.load(Ordering::Acquire);
@@ -326,6 +398,19 @@ async fn main() -> Result<()> {
             analysis::display_run_summary(summary);
             let metrics_json = analysis::build_metrics_report(summary);
             debug!(metrics = %metrics_json, "Computed run metrics");
+        }
+
+        if let Some(resolver) = leader_resolver.as_ref() {
+            let slots =
+                analysis::collect_signature_slots(comparator.as_ref(), endpoint_descriptors.len());
+            let leaders_by_slot = resolver.resolve_many(slots).await;
+            let breakdown = analysis::compute_leader_breakdown(
+                comparator.as_ref(),
+                &endpoint_descriptors,
+                &leaders_by_slot,
+                validator_map.as_deref(),
+            );
+            analysis::display_leader_breakdown(&breakdown);
         }
 
         if let Some(run_id) = backend_run_id {
