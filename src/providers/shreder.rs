@@ -12,9 +12,7 @@ use crate::{
 
 use super::{
     GeyserProvider, ProviderContext,
-    common::{
-        TransactionAccumulator, build_signature_envelope, enqueue_signature, fatal_connection_error,
-    },
+    common::{TransactionAccumulator, fatal_connection_error},
 };
 
 #[allow(clippy::all, dead_code)]
@@ -51,14 +49,12 @@ async fn process_shredstream_endpoint(
         start_wallclock_secs,
         start_instant,
         comparator,
-        signature_tx,
         shared_counter,
         shared_shutdown,
         target_transactions,
         total_producers,
         progress,
     } = context;
-    let signature_sender = signature_tx;
     let account_pubkey = config.account.parse::<Pubkey>()?;
     let endpoint_name = endpoint.name.clone();
 
@@ -144,13 +140,7 @@ async fn process_shredstream_endpoint(
 
                 let updated = accumulator.record(signature.clone(), tx_data.clone());
 
-                if updated && let Some(envelope) = build_signature_envelope(
-                    &comparator,
-                    &endpoint_name,
-                    &signature,
-                    tx_data,
-                    total_producers,
-                ) {
+                if updated && comparator.record_observation(&endpoint_name, &signature, tx_data, total_producers) {
                     if let Some(target) = target_transactions {
                         let shared = shared_counter.fetch_add(1, Ordering::AcqRel) + 1;
                         if let Some(tracker) = progress.as_ref() {
@@ -160,10 +150,6 @@ async fn process_shredstream_endpoint(
                             info!(endpoint = %endpoint_name, target, "Reached shared signature target; broadcasting shutdown");
                             let _ = shutdown_tx.send(());
                         }
-                    }
-
-                    if let Some(sender) = signature_sender.as_ref() {
-                        enqueue_signature(sender, &endpoint_name, &signature, envelope);
                     }
                 }
 

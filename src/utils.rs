@@ -59,15 +59,17 @@ impl Comparator {
         }
     }
 
+    /// Records an observation; returns true when this observation completed
+    /// the signature (all producers have now reported it, first time).
     pub fn record_observation(
         &self,
         endpoint: &str,
         signature: &str,
         data: TransactionData,
         expected_producers: usize,
-    ) -> Option<HashMap<String, TransactionData>> {
+    ) -> bool {
         if expected_producers == 0 {
-            return None;
+            return false;
         }
 
         let mut entry = self.data.entry(signature.to_owned()).or_default();
@@ -87,11 +89,11 @@ impl Comparator {
             });
 
         if !updated {
-            return None;
+            return false;
         }
 
         if entry.len() != expected_producers {
-            return None;
+            return false;
         }
 
         let snapshot = entry.clone();
@@ -101,12 +103,12 @@ impl Comparator {
             if let Some(sender) = self.sink.lock().unwrap().as_ref() {
                 let _ = sender.send(CompleteObservation {
                     signature: signature.to_owned(),
-                    observations: snapshot.clone(),
+                    observations: snapshot,
                 });
             }
-            Some(snapshot)
+            true
         } else {
-            None
+            false
         }
     }
 

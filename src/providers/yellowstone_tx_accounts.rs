@@ -17,9 +17,7 @@ use crate::{
 
 use super::{
     GeyserProvider, ProviderContext,
-    common::{
-        TransactionAccumulator, build_signature_envelope, enqueue_signature, fatal_connection_error,
-    },
+    common::{TransactionAccumulator, fatal_connection_error},
     yellowstone_client::GeyserGrpcClient,
 };
 
@@ -49,7 +47,6 @@ async fn process_yellowstone_tx_accounts_endpoint(
         start_wallclock_secs,
         start_instant,
         comparator,
-        signature_tx,
         shared_counter,
         shared_shutdown,
         target_transactions,
@@ -57,7 +54,6 @@ async fn process_yellowstone_tx_accounts_endpoint(
         progress,
     } = context;
 
-    let signature_sender = signature_tx;
     let target_owner = config.account.clone();
     let endpoint_name = endpoint.name.clone();
     let mut log_file = if tracing::enabled!(Level::TRACE) {
@@ -162,13 +158,7 @@ async fn process_yellowstone_tx_accounts_endpoint(
                                 let updated = accumulator.record(signature.clone(), tx_data.clone());
 
                                 if updated
-                                    && let Some(envelope) = build_signature_envelope(
-                                        &comparator,
-                                        &endpoint_name,
-                                        &signature,
-                                        tx_data,
-                                        total_producers,
-                                    ) {
+                                    && comparator.record_observation(&endpoint_name, &signature, tx_data, total_producers) {
                                         if let Some(target) = target_transactions {
                                             let shared = shared_counter.fetch_add(1, Ordering::AcqRel) + 1;
                                             if let Some(tracker) = progress.as_ref() {
@@ -180,10 +170,6 @@ async fn process_yellowstone_tx_accounts_endpoint(
                                                 info!(endpoint = %endpoint_name, target, "Reached shared signature target; broadcasting shutdown");
                                                 let _ = shutdown_tx.send(());
                                             }
-                                        }
-
-                                        if let Some(sender) = signature_sender.as_ref() {
-                                            enqueue_signature(sender, &endpoint_name, &signature, envelope);
                                         }
                                     }
 

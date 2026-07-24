@@ -1,6 +1,5 @@
 pub use {
     bs58,
-    bytes::Bytes,
     futures_util::stream::StreamExt,
     serde::{Deserialize, Serialize},
     std::{
@@ -9,14 +8,12 @@ pub use {
             Arc,
             atomic::{AtomicBool, AtomicUsize, Ordering},
         },
-        thread,
         time::{Duration, Instant},
     },
     tokio::{signal::ctrl_c, sync::broadcast, task},
 };
 
 mod analysis;
-mod backend;
 mod config;
 mod leader;
 mod proto;
@@ -25,28 +22,20 @@ mod sink;
 mod utils;
 
 use anyhow::{Result, anyhow};
-use backend::{BackendStatus, StreamOptions};
-use crossbeam_queue::ArrayQueue;
 use tracing::{debug, error, info, warn};
 use tracing_subscriber::EnvFilter;
 use utils::{Comparator, ProgressTracker, get_current_timestamp};
+
 const DEFAULT_CONFIG_PATH: &str = "config.toml";
-const DEFAULT_BACKEND_STREAM_URL: &str = "wss://gb.solstack.app/v1/benchmarks/stream";
-const MAX_STREAM_TRANSACTIONS: i32 = 100_000;
-const SIGNATURE_QUEUE_CAPACITY: usize = 1_024;
 
 struct CliArgs {
     config_path: Option<String>,
-    disable_streaming: bool,
 }
 
 impl CliArgs {
     fn parse() -> Self {
         let mut args = env::args().skip(1);
-        let mut parsed = CliArgs {
-            config_path: None,
-            disable_streaming: false,
-        };
+        let mut parsed = CliArgs { config_path: None };
 
         while let Some(arg) = args.next() {
             match arg.as_str() {
@@ -57,9 +46,6 @@ impl CliArgs {
                         std::process::exit(1);
                     });
                     parsed.config_path = Some(value);
-                }
-                "--private" => {
-                    parsed.disable_streaming = true;
                 }
                 "--help" | "-h" => {
                     print_usage();
@@ -78,7 +64,7 @@ impl CliArgs {
 }
 
 fn print_usage() {
-    eprintln!("Usage: geyserbench [--config <PATH>] [--private]");
+    eprintln!("Usage: geyserbench [--config <PATH>]");
 }
 
 #[tokio::main]
@@ -97,6 +83,12 @@ async fn main() -> Result<()> {
     info!(config_path = config_path, "Loaded configuration");
 
     let duration_mode = config.config.duration_secs.is_some();
+    if duration_mode {
+        info!(
+            duration_secs = config.config.duration_secs,
+            "Duration mode: transaction target ignored"
+        );
+    }
 
     let leader_resolver = config
         .config
@@ -125,116 +117,9 @@ async fn main() -> Result<()> {
     let start_time_local = get_current_timestamp();
     let comparator = Arc::new(Comparator::new());
     let start_instant = Instant::now();
-    let clock_offset_ms: f64;
-    let server_started_at_unix_ms: Option<i64>;
     let shared_counter = Arc::new(AtomicUsize::new(0));
     let shared_shutdown = Arc::new(AtomicBool::new(false));
     let aborted = Arc::new(AtomicBool::new(false));
-
-    let high_transaction_volume = config.config.transactions > MAX_STREAM_TRANSACTIONS;
-    if high_transaction_volume {
-        warn!(
-            transactions = config.config.transactions,
-            threshold = MAX_STREAM_TRANSACTIONS,
-            "Disabling backend streaming for high-volume run; backend streaming is unavailable when transactions exceed the threshold"
-        );
-    }
-
-    if duration_mode {
-        info!(
-            duration_secs = config.config.duration_secs,
-            "Duration mode: transaction target ignored, backend streaming disabled"
-        );
-    }
-
-    let mut backend_settings = config.backend.clone();
-    backend_settings.enabled = !(cli.disable_streaming || high_transaction_volume || duration_mode);
-    backend_settings.url = Some(DEFAULT_BACKEND_STREAM_URL.to_string());
-
-    let mut backend_handle = None;
-    let mut signature_queues: Option<Vec<Arc<ArrayQueue<backend::SignatureEnvelope>>>> = None;
-    let mut signature_forwarder: Option<thread::JoinHandle<()>> = None;
-    let mut forwarder_stop: Option<Arc<AtomicBool>> = None;
-    let mut backend_run_id = None;
-
-    if backend_settings.enabled {
-        let url = backend_settings
-            .url
-            .clone()
-            .ok_or_else(|| anyhow!("backend streaming enabled but no URL configured"))?;
-        let options = StreamOptions { url, summary: None };
-        let handle = backend::connect_stream(options, &config.config, &config.endpoint).await?;
-        clock_offset_ms = handle.clock_offset_ms();
-        server_started_at_unix_ms = handle.server_started_at_unix_ms();
-        let run_id = handle.run_id().to_string();
-        info!(
-            run_id = %run_id,
-            started_at_unix_ms = server_started_at_unix_ms,
-            clock_offset_ms,
-            "Streaming backend session initialised"
-        );
-        backend_run_id = Some(run_id.clone());
-
-        let mut queues = Vec::with_capacity(config.endpoint.len());
-        for _ in 0..config.endpoint.len() {
-            queues.push(Arc::new(ArrayQueue::new(SIGNATURE_QUEUE_CAPACITY)));
-        }
-        let queue_handles = queues.iter().map(Arc::clone).collect::<Vec<_>>();
-        signature_queues = Some(queues);
-
-        let mut status_rx = handle.status();
-        let shutdown_for_backend = shutdown_tx.clone();
-        let run_id_for_status = run_id.clone();
-        tokio::spawn(async move {
-            while status_rx.changed().await.is_ok() {
-                match status_rx.borrow().clone() {
-                    BackendStatus::Failed { message } => {
-                        error!(run_id = %run_id_for_status, error = %message, "Backend streaming failed");
-                        let _ = shutdown_for_backend.send(());
-                        break;
-                    }
-                    BackendStatus::Completed { .. } => break,
-                    BackendStatus::Ready { run_id } => {
-                        debug!(run_id = %run_id, "Backend stream ready");
-                    }
-                    BackendStatus::Initializing => {}
-                }
-            }
-        });
-
-        let backend_sender = handle.signature_sender();
-        let run_id_for_forwarder = run_id.clone();
-        let stop_flag = Arc::new(AtomicBool::new(false));
-        forwarder_stop = Some(stop_flag.clone());
-        let forwarder = thread::spawn(move || {
-            let queue_handles = queue_handles;
-            loop {
-                let mut did_work = false;
-                for queue in &queue_handles {
-                    while let Some(envelope) = queue.pop() {
-                        did_work = true;
-                        if backend_sender.blocking_send(envelope).is_err() {
-                            warn!(run_id = %run_id_for_forwarder, "Failed to forward signature to backend");
-                            return;
-                        }
-                    }
-                }
-
-                let should_stop = stop_flag.load(Ordering::Acquire);
-                if should_stop && queue_handles.iter().all(|queue| queue.is_empty()) {
-                    break;
-                }
-
-                if !did_work {
-                    thread::sleep(Duration::from_millis(1));
-                }
-            }
-        });
-        signature_forwarder = Some(forwarder);
-        backend_handle = Some(handle);
-    } else {
-        info!("Backend streaming disabled; collecting metrics locally");
-    }
 
     let mut handles = Vec::new();
     let endpoint_descriptors: Vec<analysis::EndpointDescriptor> = config
@@ -279,19 +164,15 @@ async fn main() -> Result<()> {
     }
 
     let total_producers = config.endpoint.len();
-    for (index, endpoint) in config.endpoint.clone().into_iter().enumerate() {
+    for endpoint in config.endpoint.clone() {
         let provider = providers::create_provider(&endpoint.kind);
         let shared_config = config.config.clone();
-        let signature_queue = signature_queues
-            .as_ref()
-            .and_then(|queues| queues.get(index).cloned());
         let context = providers::ProviderContext {
             shutdown_tx: shutdown_tx.clone(),
             shutdown_rx: shutdown_tx.subscribe(),
             start_wallclock_secs: start_time_local,
             start_instant,
             comparator: comparator.clone(),
-            signature_tx: signature_queue,
             shared_counter: shared_counter.clone(),
             shared_shutdown: shared_shutdown.clone(),
             target_transactions: global_target,
@@ -346,59 +227,11 @@ async fn main() -> Result<()> {
 
     let run_aborted = aborted.load(Ordering::Acquire);
 
-    let run_summary = if !run_aborted {
-        Some(analysis::compute_run_summary(
-            comparator.as_ref(),
-            &endpoint_descriptors,
-        ))
-    } else {
-        None
-    };
-
-    if let Some(handle) = backend_handle {
-        if run_aborted {
-            if let Some(run_id) = backend_run_id.as_ref() {
-                info!(run_id = %run_id, "Skipping backend finalisation due to user abort");
-            } else {
-                info!("Skipping backend finalisation due to user abort");
-            }
-            // Dropping the handle without calling finish() prevents the backend run from being saved.
-        } else {
-            let run_id = backend_run_id
-                .clone()
-                .unwrap_or_else(|| "unknown".to_string());
-            match handle.finish().await {
-                Ok(result) => {
-                    info!(run_id = %run_id, "Backend completed run");
-                    debug!(run_id = %run_id, response = %result.response, "Backend completion payload");
-                }
-                Err(err) => {
-                    error!(run_id = %run_id, error = %err, "Backend streaming ended with error");
-                }
-            }
-        }
-    }
-
-    let _ = signature_queues.take();
-    if let Some(stop) = forwarder_stop.as_ref() {
-        stop.store(true, Ordering::Release);
-    }
-
-    if let Some(join) = signature_forwarder
-        && let Err(err) = join.join()
-    {
-        warn!(
-            "Signature forwarder thread terminated unexpectedly: {:?}",
-            err
-        );
-    }
-
     if !run_aborted {
-        if let Some(summary) = run_summary.as_ref() {
-            analysis::display_run_summary(summary);
-            let metrics_json = analysis::build_metrics_report(summary);
-            debug!(metrics = %metrics_json, "Computed run metrics");
-        }
+        let summary = analysis::compute_run_summary(comparator.as_ref(), &endpoint_descriptors);
+        analysis::display_run_summary(&summary);
+        let metrics_json = analysis::build_metrics_report(&summary);
+        debug!(metrics = %metrics_json, "Computed run metrics");
 
         if let Some(resolver) = leader_resolver.as_ref() {
             let slots =
@@ -411,10 +244,6 @@ async fn main() -> Result<()> {
                 validator_map.as_deref(),
             );
             analysis::display_leader_breakdown(&breakdown);
-        }
-
-        if let Some(run_id) = backend_run_id {
-            println!("🔗 Share this benchmark run: https://runs.solstack.app/run/{run_id}");
         }
     } else {
         info!("Benchmark aborted before completion; no results were generated");

@@ -7,8 +7,6 @@ use std::{fs, path::Path};
 pub struct ConfigToml {
     pub config: Config,
     pub endpoint: Vec<Endpoint>,
-    #[serde(default)]
-    pub backend: BackendSettings,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub validator_map: Option<ValidatorMapSettings>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -89,18 +87,6 @@ pub struct Endpoint {
     pub influx_bucket: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub influx_stage: Option<String>,
-}
-
-fn default_true() -> bool {
-    true
-}
-
-#[derive(Debug, Default, Deserialize, Serialize, Clone)]
-pub struct BackendSettings {
-    #[serde(default = "default_true")]
-    pub enabled: bool,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub url: Option<String>,
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone, PartialEq)]
@@ -198,7 +184,6 @@ impl ConfigToml {
                     influx_stage: None,
                 },
             ],
-            backend: BackendSettings::default(),
             validator_map: None,
             influx_sink: None,
         };

@@ -28,19 +28,21 @@ cargo build --release
 # Output: target/release/geyserbench
 
 # Run the binary
-./target/release/geyserbench                     # Uses config.toml, streams to backend
+./target/release/geyserbench                     # Uses config.toml
 ./target/release/geyserbench --config path.toml  # Custom config path
-./target/release/geyserbench --private           # Disable backend streaming
 ```
+
+All results are local-only. Backend streaming / run sharing (the former SolStack
+integration) was deliberately and permanently removed — never re-add any feature
+that uploads benchmark data to an external service.
 
 ## Architecture
 
 ### Module Structure
 
-- **main.rs** - CLI argument parsing, tokio runtime setup, orchestrates providers and backend streaming
+- **main.rs** - CLI argument parsing, tokio runtime setup, orchestrates providers
 - **config.rs** - TOML config parsing (`Config`, `Endpoint`, `EndpointKind`, `ValidatorMapSettings`, `InfluxSinkSettings`)
 - **analysis.rs** - results aggregation and CLI table rendering (per-endpoint mode column, leader/region breakdown)
-- **backend.rs** - WebSocket streaming to SolStack backend
 - **leader.rs** - `LeaderResolver` (slot -> leader identity via RPC leader schedule) and `ValidatorMap` (RTT-map-based in-region classification)
 - **sink.rs** - InfluxDB v2 line-protocol writer for long-running per-(leader, endpoint) window counters
 - **utils.rs** - `Comparator` (thread-safe results aggregation via DashMap; emits `CompleteObservation`s to the sink), `ProgressTracker`
@@ -69,7 +71,6 @@ Factory function `create_provider()` instantiates providers by `EndpointKind`. E
 - All providers run concurrently, sharing state via `Arc<Comparator>` (DashMap-backed)
 - `broadcast::channel` coordinates graceful shutdown across tasks
 - `AtomicBool`/`AtomicUsize` provide lock-free shared counters
-- Signature forwarding to backend uses a dedicated thread with `ArrayQueue`
 
 ### Protocol Buffers
 
@@ -177,7 +178,7 @@ Short runs cannot cover the validator set (leader rotation is stake-weighted;
 per-validator confidence needs hours). For long runs:
 
 - `duration_secs` runs for a fixed wall-clock duration instead of a signature
-  target. It disables backend streaming and progress tracking, and Ctrl+C
+  target. It disables progress tracking, and Ctrl+C
   finalizes the report early instead of aborting.
 - `[influx_sink]` streams per-(leader, endpoint) window counters to InfluxDB v2
   whenever a signature has been observed by **all** endpoints (matching the CLI
@@ -238,6 +239,5 @@ For transaction-accounts benchmarking against modified Agave/Yellowstone forks:
 - **tokio** - Async runtime
 - **tonic/prost** - gRPC client and Protocol Buffers
 - **dashmap** - Concurrent hashmap for results aggregation
-- **crossbeam-queue** - Lock-free queue for signature forwarding
 - **comfy-table** - CLI table rendering
 - **tracing** - Structured logging (configure via `RUST_LOG`)

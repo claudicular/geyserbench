@@ -9,10 +9,7 @@ use crate::{
     utils::TransactionData,
 };
 
-use super::{
-    GeyserProvider, ProviderContext,
-    common::{TransactionAccumulator, build_signature_envelope, enqueue_signature},
-};
+use super::{GeyserProvider, ProviderContext, common::TransactionAccumulator};
 
 pub struct InfluxdbProvider;
 
@@ -194,7 +191,6 @@ async fn process_influxdb_endpoint(
         start_wallclock_secs,
         start_instant: _,
         comparator,
-        signature_tx,
         shared_counter,
         shared_shutdown,
         target_transactions,
@@ -202,7 +198,6 @@ async fn process_influxdb_endpoint(
         progress,
     } = context;
 
-    let signature_sender = signature_tx;
     let endpoint_name = endpoint.name.clone();
 
     // Extract InfluxDB-specific configuration
@@ -333,13 +328,7 @@ async fn process_influxdb_endpoint(
                             let updated = accumulator.record(signature.clone(), tx_data.clone());
 
                             if updated {
-                                if let Some(envelope) = build_signature_envelope(
-                                    &comparator,
-                                    &endpoint_name,
-                                    &signature,
-                                    tx_data,
-                                    total_producers,
-                                ) {
+                                if comparator.record_observation(&endpoint_name, &signature, tx_data, total_producers) {
                                     if let Some(target) = target_transactions {
                                         let shared = shared_counter
                                             .fetch_add(1, Ordering::AcqRel)
@@ -357,10 +346,6 @@ async fn process_influxdb_endpoint(
                                             );
                                             let _ = shutdown_tx.send(());
                                         }
-                                    }
-
-                                    if let Some(sender) = signature_sender.as_ref() {
-                                        enqueue_signature(sender, &endpoint_name, &signature, envelope);
                                     }
                                 }
                             }
