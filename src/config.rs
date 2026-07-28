@@ -99,6 +99,8 @@ pub enum EndpointKind {
     Thor,
     Shredstream,
     Shreder,
+    #[serde(rename = "raiden_pulse")]
+    RaidenPulse,
     Jetstream,
     Influxdb,
 }
@@ -141,6 +143,7 @@ impl EndpointKind {
             EndpointKind::Thor => "thor",
             EndpointKind::Shredstream => "shredstream",
             EndpointKind::Shreder => "shreder",
+            EndpointKind::RaidenPulse => "raiden_pulse",
             EndpointKind::Jetstream => "jetstream",
             EndpointKind::Influxdb => "influxdb",
         }
@@ -202,5 +205,31 @@ impl ConfigToml {
         } else {
             Self::create_default(path)
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{ConfigToml, EndpointKind};
+
+    #[test]
+    fn parses_raiden_pulse_endpoint_kind() {
+        let config: ConfigToml = toml::from_str(
+            r#"
+                [config]
+                transactions = 1000
+                account = "pAMMBay6oceH9fJKBRHGP5D4bD4sWpmSwMn52FMfXEA"
+                commitment = "processed"
+
+                [[endpoint]]
+                name = "Raiden Pulse FRA"
+                url = "http://fra.pulse.raiden.wtf:16000"
+                kind = "raiden_pulse"
+            "#,
+        )
+        .unwrap();
+
+        assert_eq!(config.endpoint[0].kind, EndpointKind::RaidenPulse);
+        assert_eq!(config.endpoint[0].kind.as_str(), "raiden_pulse");
     }
 }

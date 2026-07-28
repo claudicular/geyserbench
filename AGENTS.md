@@ -13,7 +13,7 @@ Primary goal: find and validate optimizations and new features in those forks wi
 
 ## Project Overview
 
-GeyserBench is a Rust CLI benchmarking tool for Solana gRPC-compatible data feeds. It benchmarks multiple providers concurrently (`yellowstone`, `arpc`, `thor`, `shredstream`, `shreder`, `jetstream`, `influxdb`) and tracks:
+GeyserBench is a Rust CLI benchmarking tool for Solana gRPC-compatible data feeds. It benchmarks multiple providers concurrently (`yellowstone`, `arpc`, `thor`, `shredstream`, `shreder`, `raiden_pulse`, `jetstream`, `influxdb`) and tracks:
 
 - first-detection share
 - latency percentiles (P50/P95/P99)
@@ -78,13 +78,12 @@ pub trait GeyserProvider: Send + Sync {
 
 ### Protocol Buffers
 
-`build.rs` compiles 8 proto files at build time using `tonic-prost-build`:
+`build.rs` compiles 7 proto files at build time using `tonic-prost-build`:
 
 - `arpc.proto`
-- `events.proto`
-- `publisher.proto`
 - `shredstream.proto`
 - `shreder.proto`
+- `shreder_binary.proto`
 - `jetstream.proto`
 - `geyser.proto`
 - `solana-storage.proto`
@@ -104,7 +103,7 @@ commitment = "processed"  # processed | confirmed | finalized
 [[endpoint]]
 name = "Provider Name"
 url = "https://endpoint.url:port"
-kind = "yellowstone"      # yellowstone | arpc | thor | shredstream | shreder | jetstream | influxdb
+kind = "yellowstone"      # yellowstone | arpc | thor | shredstream | shreder | raiden_pulse | jetstream | influxdb
 x_token = "optional-auth-token"
 ```
 

@@ -17,6 +17,7 @@ pub mod arpc;
 pub mod common;
 pub mod influxdb;
 pub mod jetstream;
+pub mod raiden_pulse;
 pub mod shreder;
 pub mod shredstream;
 pub mod thor;
@@ -42,6 +43,7 @@ pub fn create_provider(kind: &EndpointKind) -> Box<dyn GeyserProvider> {
         EndpointKind::Arpc => Box::new(arpc::ArpcProvider),
         EndpointKind::Thor => Box::new(thor::ThorProvider),
         EndpointKind::Shreder => Box::new(shreder::ShrederProvider),
+        EndpointKind::RaidenPulse => Box::new(raiden_pulse::RaidenPulseProvider),
         EndpointKind::Shredstream => Box::new(shredstream::ShredstreamProvider),
         EndpointKind::Jetstream => Box::new(jetstream::JetstreamProvider),
         EndpointKind::Influxdb => Box::new(influxdb::InfluxdbProvider),

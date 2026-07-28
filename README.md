@@ -4,7 +4,7 @@ GeyserBench benchmarks the speed and reliability of Solana gRPC-compatible data 
 
 ## Highlights
 
-- Benchmark multiple feeds at once (Yellowstone, aRPC, Thor, Shredstream, Jetstream, and custom gRPC endpoints)
+- Benchmark multiple feeds at once (Yellowstone, aRPC, Thor, Shredstream, Raiden Pulse, Jetstream, and custom gRPC endpoints)
 - Track first-detection share, latency percentiles (P50/P95/P99), valid transaction counts, and backfill events
 - Stream results to the SolStack backend for shareable reports, or keep runs local with a single flag
 - Generate a ready-to-edit TOML config on first launch; supply auth tokens and endpoints without code changes
@@ -63,12 +63,18 @@ name = "Corvus gRPC"
 url = "https://fra.corvus-labs.io:10101"
 x_token = "optional-auth-token"
 kind = "yellowstone"
+
+[[endpoint]]
+name = "Raiden Pulse FRA"
+url = "http://fra.pulse.raiden.wtf:16000"
+kind = "raiden_pulse"
 ```
 
 - `config.transactions` sets how many signatures to evaluate (backend streaming automatically disables itself for extremely large runs).
 - `config.account` is the pubkey monitored for transactions during the benchmark.
 - `config.commitment` accepts `processed`, `confirmed`, or `finalized`.
-- Repeat `[[endpoint]]` blocks for each feed. Supported `kind` values: `yellowstone`, `yellowstone_tx_accounts`, `arpc`, `thor`, `shredstream`, `shreder`, `jetstream`, and `influxdb`. `x_token` is optional.
+- Repeat `[[endpoint]]` blocks for each feed. Supported `kind` values: `yellowstone`, `yellowstone_tx_accounts`, `arpc`, `thor`, `shredstream`, `shreder`, `raiden_pulse`, `jetstream`, and `influxdb`. `x_token` is optional.
+- For `raiden_pulse`, use the exact URL and port issued by the Raiden dashboard. Pulse applies `config.account` as an `account_required` server-side filter and reports pre-execution transaction detection, so `config.commitment` does not apply to this feed.
 
 ## CLI Options
 
