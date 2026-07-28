@@ -17,6 +17,7 @@ GeyserBench is a Rust CLI benchmarking tool for Solana gRPC-compatible data feed
 
 - first-detection share
 - latency percentiles (P50/P95/P99)
+- peer coverage across the union of live signatures
 - valid transaction counts
 - backfill events
 

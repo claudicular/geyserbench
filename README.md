@@ -5,7 +5,7 @@ GeyserBench benchmarks the speed and reliability of Solana gRPC-compatible data 
 ## Highlights
 
 - Benchmark multiple feeds at once (Yellowstone, aRPC, Thor, Shredstream, Raiden Pulse, Jetstream, and custom gRPC endpoints)
-- Track first-detection share, latency percentiles (P50/P95/P99), valid transaction counts, and backfill events
+- Track first-detection share, latency percentiles (P50/P95/P99), peer coverage, valid transaction counts, and backfill events
 - Stream results to the SolStack backend for shareable reports, or keep runs local with a single flag
 - Generate a ready-to-edit TOML config on first launch; supply auth tokens and endpoints without code changes
 
@@ -75,6 +75,9 @@ kind = "raiden_pulse"
 - `config.commitment` accepts `processed`, `confirmed`, or `finalized`.
 - Repeat `[[endpoint]]` blocks for each feed. Supported `kind` values: `yellowstone`, `yellowstone_tx_accounts`, `arpc`, `thor`, `shredstream`, `shreder`, `raiden_pulse`, `jetstream`, and `influxdb`. `x_token` is optional.
 - For `raiden_pulse`, use the exact URL and port issued by the Raiden dashboard. Pulse applies `config.account` as an `account_required` server-side filter and reports pre-execution transaction detection, so `config.commitment` does not apply to this feed.
+- Peer coverage uses the union of live signatures observed by any configured endpoint. `Seen` and `Coverage %` show how much of that union each endpoint observed, `Unique` counts signatures seen only by that endpoint, and `Missed` counts signatures seen by at least one peer but not that endpoint. Backfill observations are excluded.
+- Prefer `config.duration_secs` runs for representative coverage comparisons. Transaction-target runs stop after the configured number of complete matches and therefore favor signatures shared by every endpoint.
+- When `config.rpc_url` and `[validator_map]` are configured, the final report repeats peer coverage for `in`, `out`, and `unknown` leader regions. See [the validator-map input contract](./docs/validator-map.md).
 
 ## CLI Options
 

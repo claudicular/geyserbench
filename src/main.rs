@@ -234,8 +234,7 @@ async fn main() -> Result<()> {
         debug!(metrics = %metrics_json, "Computed run metrics");
 
         if let Some(resolver) = leader_resolver.as_ref() {
-            let slots =
-                analysis::collect_signature_slots(comparator.as_ref(), endpoint_descriptors.len());
+            let slots = analysis::collect_signature_slots(comparator.as_ref());
             let leaders_by_slot = resolver.resolve_many(slots).await;
             let breakdown = analysis::compute_leader_breakdown(
                 comparator.as_ref(),

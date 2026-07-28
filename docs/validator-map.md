@@ -66,7 +66,7 @@ classification policy in one place.
 
 ## Where it shows up
 
-- CLI report: the per-region summary table and the `Region` column of the
-  per-leader table (`in` / `out` / `unknown`).
+- CLI report: the per-region peer-coverage and latency tables, plus the
+  `Region` column of the per-leader table (`in` / `out` / `unknown`).
 - InfluxDB sink: the `region` tag on every emitted row (`all` on the `ALL`
   rollup rows).

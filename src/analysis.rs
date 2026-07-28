@@ -31,6 +31,8 @@ pub struct EndpointStats {
     pub first_detections: usize,
     pub delays_ms: Vec<f64>,
     pub backfill_transactions: usize,
+    pub peer_observations: usize,
+    pub peer_unique_detections: usize,
 }
 
 #[derive(Debug, Default, Clone)]
@@ -44,6 +46,10 @@ pub struct EndpointSummary {
     pub valid_transactions: usize,
     pub first_detections: usize,
     pub backfill_transactions: usize,
+    pub peer_observations: usize,
+    pub peer_coverage: f64,
+    pub peer_unique_detections: usize,
+    pub peer_missed_signatures: usize,
 }
 
 #[derive(Debug, Clone)]
@@ -53,6 +59,7 @@ pub struct RunSummary {
     pub has_data: bool,
     pub total_signatures: usize,
     pub backfill_signatures: usize,
+    pub peer_union_signatures: usize,
 }
 
 pub fn compute_run_summary(
@@ -67,6 +74,7 @@ pub fn compute_run_summary(
     let expected_producers = endpoints.len();
     let mut total_signatures = 0usize;
     let mut backfill_signatures = 0usize;
+    let mut peer_union_signatures = 0usize;
 
     for endpoint in endpoints {
         endpoint_stats.insert(endpoint.name.clone(), EndpointStats::default());
@@ -74,14 +82,34 @@ pub fn compute_run_summary(
 
     for sig_entry in comparator.iter() {
         let sig_data = sig_entry.value();
-        if expected_producers > 0 && sig_data.len() != expected_producers {
-            // Skip partial observations to mirror backend results
-            continue;
-        }
-
         let is_historical = sig_data
             .values()
             .any(|tx| tx.wallclock_secs < tx.start_wallclock_secs);
+        let observed_endpoints: Vec<&str> = endpoints
+            .iter()
+            .filter(|endpoint| sig_data.contains_key(&endpoint.name))
+            .map(|endpoint| endpoint.name.as_str())
+            .collect();
+
+        if !is_historical && !observed_endpoints.is_empty() {
+            peer_union_signatures += 1;
+            for endpoint in &observed_endpoints {
+                if let Some(stats) = endpoint_stats.get_mut(*endpoint) {
+                    stats.peer_observations += 1;
+                }
+            }
+            if observed_endpoints.len() == 1
+                && let Some(stats) = endpoint_stats.get_mut(observed_endpoints[0])
+            {
+                stats.peer_unique_detections += 1;
+            }
+        }
+
+        if expected_producers > 0 && observed_endpoints.len() != expected_producers {
+            // Latency comparisons require every endpoint, but peer coverage
+            // intentionally retains these partial observations.
+            continue;
+        }
 
         if is_historical {
             backfill_signatures += 1;
@@ -123,7 +151,13 @@ pub fn compute_run_summary(
                 .get(&endpoint)
                 .cloned()
                 .unwrap_or_else(|| "unknown".to_string());
-            build_summary(endpoint, mode, stats, total_signatures)
+            build_summary(
+                endpoint,
+                mode,
+                stats,
+                total_signatures,
+                peer_union_signatures,
+            )
         })
         .collect();
 
@@ -141,6 +175,7 @@ pub fn compute_run_summary(
         has_data,
         total_signatures,
         backfill_signatures,
+        peer_union_signatures,
     }
 }
 
@@ -190,37 +225,91 @@ pub fn display_run_summary(summary: &RunSummary) {
     println!("\nDetailed test results");
     println!("--------------------------------------------");
 
-    if !summary.has_data {
+    if summary.has_data {
+        let mut table_rows: Vec<&EndpointSummary> = summary.endpoints.iter().collect();
+        table_rows.sort_by(|a, b| compare_latency(a, b));
+
+        let mut table = Table::new();
+        table.load_preset(table_preset());
+        table.set_content_arrangement(ContentArrangement::Dynamic);
+        table.set_header(vec![
+            "Endpoint", "Mode", "First %", "P50 ms", "P95 ms", "P99 ms", "Valid Tx", "Firsts",
+            "Backfill",
+        ]);
+
+        for summary in table_rows {
+            table.add_row(vec![
+                summary.name.clone(),
+                summary.mode.clone(),
+                format_percent(summary.first_share),
+                format_latency_value(summary.p50_delay_ms),
+                format_latency_value(summary.p95_delay_ms),
+                format_latency_value(summary.p99_delay_ms),
+                summary.valid_transactions.to_string(),
+                summary.first_detections.to_string(),
+                summary.backfill_transactions.to_string(),
+            ]);
+        }
+
+        println!("{}", table);
+    } else {
+        println!("Not enough complete matches for latency comparison");
+    }
+
+    display_peer_coverage(summary);
+}
+
+fn display_peer_coverage(summary: &RunSummary) {
+    println!("\nPeer coverage");
+    println!("--------------------------------------------");
+
+    if summary.endpoints.len() < 2 {
+        println!("Peer coverage requires at least two endpoints");
+        return;
+    }
+    if summary.peer_union_signatures == 0 {
         println!("Not enough data");
         return;
     }
 
-    let mut table_rows: Vec<&EndpointSummary> = summary.endpoints.iter().collect();
-    table_rows.sort_by(|a, b| compare_latency(a, b));
+    println!(
+        "Union: {} live signatures; shared by every endpoint: {}",
+        summary.peer_union_signatures, summary.total_signatures
+    );
+
+    let mut rows: Vec<&EndpointSummary> = summary.endpoints.iter().collect();
+    rows.sort_by(|a, b| {
+        b.peer_coverage
+            .partial_cmp(&a.peer_coverage)
+            .unwrap_or(Ordering::Equal)
+            .then_with(|| a.name.cmp(&b.name))
+    });
 
     let mut table = Table::new();
     table.load_preset(table_preset());
     table.set_content_arrangement(ContentArrangement::Dynamic);
     table.set_header(vec![
-        "Endpoint", "Mode", "First %", "P50 ms", "P95 ms", "P99 ms", "Valid Tx", "Firsts",
-        "Backfill",
+        "Endpoint",
+        "Mode",
+        "Seen",
+        "Coverage %",
+        "Unique",
+        "Missed",
     ]);
-
-    for summary in table_rows {
+    for endpoint in rows {
         table.add_row(vec![
-            summary.name.clone(),
-            summary.mode.clone(),
-            format_percent(summary.first_share),
-            format_latency_value(summary.p50_delay_ms),
-            format_latency_value(summary.p95_delay_ms),
-            format_latency_value(summary.p99_delay_ms),
-            summary.valid_transactions.to_string(),
-            summary.first_detections.to_string(),
-            summary.backfill_transactions.to_string(),
+            endpoint.name.clone(),
+            endpoint.mode.clone(),
+            endpoint.peer_observations.to_string(),
+            format_percent(endpoint.peer_coverage),
+            endpoint.peer_unique_detections.to_string(),
+            endpoint.peer_missed_signatures.to_string(),
         ]);
     }
-
     println!("{}", table);
+    println!(
+        "Unique = seen only by that endpoint; Missed = seen by at least one peer; backfill is excluded"
+    );
 }
 
 pub fn build_metrics_report(summary: &RunSummary) -> Value {
@@ -235,6 +324,10 @@ pub fn build_metrics_report(summary: &RunSummary) -> Value {
             "observations": endpoint.valid_transactions,
             "first_detections": endpoint.first_detections,
             "backfill_transactions": endpoint.backfill_transactions,
+            "peer_observations": endpoint.peer_observations,
+            "peer_coverage_rate": endpoint.peer_coverage,
+            "peer_unique_detections": endpoint.peer_unique_detections,
+            "peer_missed_signatures": endpoint.peer_missed_signatures,
         });
         per_endpoint.insert(endpoint.name.clone(), payload);
     }
@@ -242,6 +335,8 @@ pub fn build_metrics_report(summary: &RunSummary) -> Value {
     json!({
         "total_signatures": summary.total_signatures,
         "backfill_signatures": summary.backfill_signatures,
+        "peer_union_signatures": summary.peer_union_signatures,
+        "peer_shared_signatures": summary.total_signatures,
         "per_endpoint": per_endpoint
     })
 }
@@ -292,6 +387,32 @@ struct GroupAgg {
     per_endpoint: HashMap<String, GroupEndpointStats>,
 }
 
+#[derive(Debug, Default, Clone)]
+pub struct PeerCoverageStats {
+    pub observations: usize,
+    pub unique_detections: usize,
+}
+
+impl PeerCoverageStats {
+    fn coverage(&self, union_signatures: usize) -> f64 {
+        if union_signatures == 0 {
+            return 0.0;
+        }
+        self.observations as f64 / union_signatures as f64
+    }
+
+    fn missed(&self, union_signatures: usize) -> usize {
+        union_signatures.saturating_sub(self.observations)
+    }
+}
+
+#[derive(Debug, Default)]
+struct CoverageAgg {
+    union_signatures: usize,
+    shared_signatures: usize,
+    per_endpoint: HashMap<String, PeerCoverageStats>,
+}
+
 #[derive(Debug)]
 pub struct LeaderRow {
     pub leader: String,
@@ -308,17 +429,28 @@ pub struct RegionRow {
 }
 
 #[derive(Debug)]
+pub struct CoverageRegionRow {
+    pub region: Region,
+    pub union_signatures: usize,
+    pub shared_signatures: usize,
+    pub per_endpoint: HashMap<String, PeerCoverageStats>,
+}
+
+#[derive(Debug)]
 pub struct LeaderBreakdown {
     pub endpoint_names: Vec<String>,
     pub leaders: Vec<LeaderRow>,
     pub regions: Vec<RegionRow>,
     pub total_sigs: usize,
     pub resolved_sigs: usize,
+    pub coverage_regions: Vec<CoverageRegionRow>,
+    pub coverage_total_sigs: usize,
+    pub coverage_resolved_sigs: usize,
     pub gated_leaders: usize,
     pub has_region_data: bool,
 }
 
-/// Slot attributed to a complete signature: the winning endpoint's slot when
+/// Slot attributed to a signature: the earliest endpoint's slot when
 /// available, otherwise any endpoint's.
 fn signature_slot(sig_data: &HashMap<String, TransactionData>) -> Option<u64> {
     let winner = sig_data.values().min_by_key(|tx| tx.elapsed_since_start)?;
@@ -327,15 +459,12 @@ fn signature_slot(sig_data: &HashMap<String, TransactionData>) -> Option<u64> {
         .or_else(|| sig_data.values().find_map(|tx| tx.slot))
 }
 
-/// Distinct slots across complete, non-backfill signatures — the set the
-/// leader resolver needs to cover for the final report.
-pub fn collect_signature_slots(comparator: &Comparator, expected_producers: usize) -> Vec<u64> {
+/// Distinct slots across all live signatures observed by at least one endpoint
+/// — the set the leader resolver needs for latency and peer-coverage reports.
+pub fn collect_signature_slots(comparator: &Comparator) -> Vec<u64> {
     let mut slots = Vec::new();
     for sig_entry in comparator.iter() {
         let sig_data = sig_entry.value();
-        if expected_producers > 0 && sig_data.len() != expected_producers {
-            continue;
-        }
         if sig_data
             .values()
             .any(|tx| tx.wallclock_secs < tx.start_wallclock_secs)
@@ -362,14 +491,14 @@ pub fn compute_leader_breakdown(
 
     let mut per_leader: HashMap<Arc<str>, GroupAgg> = HashMap::new();
     let mut per_region: HashMap<Region, GroupAgg> = HashMap::new();
+    let mut coverage_per_region: HashMap<Region, CoverageAgg> = HashMap::new();
     let mut total_sigs = 0usize;
     let mut resolved_sigs = 0usize;
+    let mut coverage_total_sigs = 0usize;
+    let mut coverage_resolved_sigs = 0usize;
 
     for sig_entry in comparator.iter() {
         let sig_data = sig_entry.value();
-        if expected_producers > 0 && sig_data.len() != expected_producers {
-            continue;
-        }
         if sig_data
             .values()
             .any(|tx| tx.wallclock_secs < tx.start_wallclock_secs)
@@ -377,13 +506,20 @@ pub fn compute_leader_breakdown(
             continue;
         }
 
-        let Some((first_endpoint, first_tx)) =
-            sig_data.iter().min_by_key(|(_, tx)| tx.elapsed_since_start)
-        else {
+        let observed_endpoints: Vec<&str> = endpoint_names
+            .iter()
+            .filter(|endpoint| sig_data.contains_key(*endpoint))
+            .map(String::as_str)
+            .collect();
+        if observed_endpoints.is_empty() {
             continue;
-        };
+        }
 
-        total_sigs += 1;
+        let is_complete = expected_producers > 0 && observed_endpoints.len() == expected_producers;
+        coverage_total_sigs += 1;
+        if is_complete {
+            total_sigs += 1;
+        }
 
         let leader = signature_slot(sig_data)
             .and_then(|slot| leaders_by_slot.get(&slot))
@@ -391,12 +527,42 @@ pub fn compute_leader_breakdown(
         let Some(leader) = leader else {
             continue;
         };
-        resolved_sigs += 1;
+        coverage_resolved_sigs += 1;
 
         let region = validator_map
             .map(|map| map.classify(&leader))
             .unwrap_or(Region::Unknown);
 
+        let coverage_agg = coverage_per_region.entry(region).or_default();
+        coverage_agg.union_signatures += 1;
+        if is_complete {
+            coverage_agg.shared_signatures += 1;
+        }
+        for endpoint in &observed_endpoints {
+            coverage_agg
+                .per_endpoint
+                .entry((*endpoint).to_string())
+                .or_default()
+                .observations += 1;
+        }
+        if observed_endpoints.len() == 1 {
+            coverage_agg
+                .per_endpoint
+                .entry(observed_endpoints[0].to_string())
+                .or_default()
+                .unique_detections += 1;
+        }
+
+        if !is_complete {
+            continue;
+        }
+        resolved_sigs += 1;
+
+        let Some((first_endpoint, first_tx)) =
+            sig_data.iter().min_by_key(|(_, tx)| tx.elapsed_since_start)
+        else {
+            continue;
+        };
         let first_endpoint_name = first_endpoint.clone();
         let leader_agg = per_leader.entry(leader).or_default();
         leader_agg.sigs += 1;
@@ -453,12 +619,26 @@ pub fn compute_leader_breakdown(
         .collect();
     regions.sort_by_key(|row| row.region);
 
+    let mut coverage_regions: Vec<CoverageRegionRow> = coverage_per_region
+        .into_iter()
+        .map(|(region, agg)| CoverageRegionRow {
+            region,
+            union_signatures: agg.union_signatures,
+            shared_signatures: agg.shared_signatures,
+            per_endpoint: agg.per_endpoint,
+        })
+        .collect();
+    coverage_regions.sort_by_key(|row| row.region);
+
     LeaderBreakdown {
         endpoint_names,
         leaders,
         regions,
         total_sigs,
         resolved_sigs,
+        coverage_regions,
+        coverage_total_sigs,
+        coverage_resolved_sigs,
         gated_leaders,
         has_region_data,
     }
@@ -468,22 +648,71 @@ pub fn display_leader_breakdown(breakdown: &LeaderBreakdown) {
     println!("\nLeader-aware results");
     println!("--------------------------------------------");
 
-    if breakdown.total_sigs == 0 {
+    if breakdown.coverage_total_sigs == 0 {
         println!("Not enough data");
         return;
     }
 
     println!(
-        "Resolved leader for {}/{} signatures",
-        breakdown.resolved_sigs, breakdown.total_sigs
+        "Resolved leader for {}/{} peer-union signatures",
+        breakdown.coverage_resolved_sigs, breakdown.coverage_total_sigs
     );
 
-    if breakdown.resolved_sigs == 0 {
+    if breakdown.coverage_resolved_sigs == 0 {
         println!("No leader-attributed signatures; check rpc_url and provider slot support");
         return;
     }
 
+    if breakdown.has_region_data && !breakdown.coverage_regions.is_empty() {
+        println!("\nPeer coverage by leader region");
+        let mut table = Table::new();
+        table.load_preset(table_preset());
+        table.set_content_arrangement(ContentArrangement::Dynamic);
+        table.set_header(vec![
+            "Region",
+            "Endpoint",
+            "Union",
+            "Shared",
+            "Seen",
+            "Coverage %",
+            "Unique",
+            "Missed",
+        ]);
+        for row in &breakdown.coverage_regions {
+            for endpoint in &breakdown.endpoint_names {
+                let stats = row.per_endpoint.get(endpoint).cloned().unwrap_or_default();
+                table.add_row(vec![
+                    row.region.as_str().to_string(),
+                    endpoint.clone(),
+                    row.union_signatures.to_string(),
+                    row.shared_signatures.to_string(),
+                    stats.observations.to_string(),
+                    format_percent(stats.coverage(row.union_signatures)),
+                    stats.unique_detections.to_string(),
+                    stats.missed(row.union_signatures).to_string(),
+                ]);
+            }
+        }
+        println!("{}", table);
+    }
+
+    if breakdown.total_sigs == 0 {
+        println!("No complete matches for leader-aware latency comparison");
+        return;
+    }
+
+    println!(
+        "\nResolved leader for {}/{} complete signatures",
+        breakdown.resolved_sigs, breakdown.total_sigs
+    );
+
+    if breakdown.resolved_sigs == 0 {
+        println!("No leader-attributed complete signatures for latency comparison");
+        return;
+    }
+
     if breakdown.has_region_data && !breakdown.regions.is_empty() {
+        println!("\nLatency by leader region");
         let mut table = Table::new();
         table.load_preset(table_preset());
         table.set_content_arrangement(ContentArrangement::Dynamic);
@@ -577,13 +806,23 @@ fn build_summary(
     mode: String,
     stats: EndpointStats,
     total_signatures: usize,
+    peer_union_signatures: usize,
 ) -> EndpointSummary {
+    let peer_coverage = if peer_union_signatures == 0 {
+        0.0
+    } else {
+        stats.peer_observations as f64 / peer_union_signatures as f64
+    };
     let mut summary = EndpointSummary {
         name: endpoint,
         mode,
         valid_transactions: stats.total_observations,
         first_detections: stats.first_detections,
         backfill_transactions: stats.backfill_transactions,
+        peer_observations: stats.peer_observations,
+        peer_coverage,
+        peer_unique_detections: stats.peer_unique_detections,
+        peer_missed_signatures: peer_union_signatures.saturating_sub(stats.peer_observations),
         ..Default::default()
     };
 
@@ -625,5 +864,164 @@ fn format_percent(value: f64) -> String {
         format!("{:.2}", value * 100.0)
     } else {
         "—".to_string()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::ValidatorMapSettings;
+    use std::fs;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    fn endpoints() -> Vec<EndpointDescriptor> {
+        vec![
+            EndpointDescriptor {
+                name: "Pulse".to_string(),
+                mode: "raiden_pulse".to_string(),
+            },
+            EndpointDescriptor {
+                name: "Shredstream".to_string(),
+                mode: "shredstream".to_string(),
+            },
+        ]
+    }
+
+    fn transaction(elapsed_ms: u64, slot: u64, historical: bool) -> TransactionData {
+        TransactionData {
+            wallclock_secs: if historical { 99.0 } else { 101.0 },
+            elapsed_since_start: Duration::from_millis(elapsed_ms),
+            start_wallclock_secs: 100.0,
+            slot: Some(slot),
+        }
+    }
+
+    fn coverage_fixture() -> Comparator {
+        let comparator = Comparator::new();
+        comparator.add_batch(
+            "Pulse",
+            HashMap::from([
+                ("shared".to_string(), transaction(5, 1, false)),
+                ("pulse-in".to_string(), transaction(10, 2, false)),
+                ("pulse-out".to_string(), transaction(20, 3, false)),
+                ("backfill".to_string(), transaction(30, 99, true)),
+            ]),
+        );
+        comparator.add_batch(
+            "Shredstream",
+            HashMap::from([
+                ("shared".to_string(), transaction(6, 1, false)),
+                ("shred-out".to_string(), transaction(15, 4, false)),
+            ]),
+        );
+        comparator
+    }
+
+    #[test]
+    fn peer_coverage_uses_live_union_and_keeps_partial_observations() {
+        let summary = compute_run_summary(&coverage_fixture(), &endpoints());
+
+        assert_eq!(summary.peer_union_signatures, 4);
+        assert_eq!(summary.total_signatures, 1);
+
+        let pulse = summary
+            .endpoints
+            .iter()
+            .find(|endpoint| endpoint.name == "Pulse")
+            .unwrap();
+        assert_eq!(pulse.peer_observations, 3);
+        assert_eq!(pulse.peer_unique_detections, 2);
+        assert_eq!(pulse.peer_missed_signatures, 1);
+        assert!((pulse.peer_coverage - 0.75).abs() < f64::EPSILON);
+
+        let shredstream = summary
+            .endpoints
+            .iter()
+            .find(|endpoint| endpoint.name == "Shredstream")
+            .unwrap();
+        assert_eq!(shredstream.peer_observations, 2);
+        assert_eq!(shredstream.peer_unique_detections, 1);
+        assert_eq!(shredstream.peer_missed_signatures, 2);
+        assert!((shredstream.peer_coverage - 0.5).abs() < f64::EPSILON);
+
+        let metrics = build_metrics_report(&summary);
+        assert_eq!(metrics["peer_union_signatures"], 4);
+        assert_eq!(metrics["peer_shared_signatures"], 1);
+        assert_eq!(metrics["per_endpoint"]["Pulse"]["peer_coverage_rate"], 0.75);
+    }
+
+    #[test]
+    fn slot_collection_includes_partial_live_signatures() {
+        assert_eq!(
+            collect_signature_slots(&coverage_fixture()),
+            vec![1, 2, 3, 4]
+        );
+    }
+
+    #[tokio::test]
+    async fn peer_coverage_is_split_by_leader_region() {
+        let suffix = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let map_path = std::env::temp_dir().join(format!(
+            "geyserbench-validator-map-{}-{suffix}.json",
+            std::process::id()
+        ));
+        fs::write(
+            &map_path,
+            r#"{
+                "version": 1,
+                "entries": {
+                    "leader-in": {"in_region": true},
+                    "leader-out": {"in_region": false}
+                }
+            }"#,
+        )
+        .unwrap();
+        let validator_map = ValidatorMap::new(ValidatorMapSettings {
+            source: map_path.to_string_lossy().into_owned(),
+            rtt_icmp_threshold_us: 5_000,
+            rtt_quic_threshold_us: None,
+            refresh_secs: 300,
+        });
+        assert!(validator_map.load().await);
+
+        let leaders_by_slot = HashMap::from([
+            (1, Arc::<str>::from("leader-in")),
+            (2, Arc::<str>::from("leader-in")),
+            (3, Arc::<str>::from("leader-out")),
+            (4, Arc::<str>::from("leader-out")),
+        ]);
+        let breakdown = compute_leader_breakdown(
+            &coverage_fixture(),
+            &endpoints(),
+            &leaders_by_slot,
+            Some(&validator_map),
+        );
+        let _ = fs::remove_file(map_path);
+
+        assert_eq!(breakdown.coverage_total_sigs, 4);
+        assert_eq!(breakdown.coverage_resolved_sigs, 4);
+
+        let in_region = breakdown
+            .coverage_regions
+            .iter()
+            .find(|row| row.region == Region::In)
+            .unwrap();
+        assert_eq!(in_region.union_signatures, 2);
+        assert_eq!(in_region.shared_signatures, 1);
+        assert_eq!(in_region.per_endpoint["Pulse"].observations, 2);
+        assert_eq!(in_region.per_endpoint["Shredstream"].observations, 1);
+
+        let out_region = breakdown
+            .coverage_regions
+            .iter()
+            .find(|row| row.region == Region::Out)
+            .unwrap();
+        assert_eq!(out_region.union_signatures, 2);
+        assert_eq!(out_region.shared_signatures, 0);
+        assert_eq!(out_region.per_endpoint["Pulse"].unique_detections, 1);
+        assert_eq!(out_region.per_endpoint["Shredstream"].unique_detections, 1);
     }
 }
