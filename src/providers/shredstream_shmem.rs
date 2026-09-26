@@ -54,6 +54,14 @@ async fn process_shmem_endpoint(
 
     // `url` is the ring's filesystem path, e.g. /dev/shm/shredstream.ring.
     let ring_path = endpoint.url.clone();
+    if ring_path.contains("://") {
+        fatal_connection_error(
+            &endpoint_name,
+            format!(
+                "shredstream_shmem url must be the ring file path (e.g. /dev/shm/shredstream.ring), got {ring_path}"
+            ),
+        );
+    }
     info!(endpoint = %endpoint_name, path = %ring_path, "Opening shmem ring");
     let consumer = ShmemRingConsumer::open(Path::new(&ring_path))
         .unwrap_or_else(|err| fatal_connection_error(&endpoint_name, err));

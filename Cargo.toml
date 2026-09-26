@@ -10,7 +10,8 @@ prost-types = "0.14"
 serde = "1"
 toml = "0.9"
 tokio = { version = "1", features = ["full"] }
-tonic = { version = "0.14", features = ["tls-native-roots"] }
+# tls-ring selects rustls' crypto provider explicitly; without it TLS setup panics at connect.
+tonic = { version = "0.14", features = ["tls-native-roots", "tls-ring"] }
 tonic-prost = "0.14"
 futures = "0.3.31"
 futures-util = "0.3.31"
