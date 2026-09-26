@@ -15,9 +15,11 @@ pub use {
 
 mod analysis;
 mod config;
+mod entry_decode;
 mod leader;
 mod proto;
 mod providers;
+mod shmem_ring;
 mod sink;
 mod utils;
 

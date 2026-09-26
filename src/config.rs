@@ -87,6 +87,9 @@ pub struct Endpoint {
     pub influx_bucket: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub influx_stage: Option<String>,
+    /// `shredstream_shmem` only: pin the ring-polling thread to this CPU (Linux).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub shmem_core: Option<usize>,
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone, PartialEq)]
@@ -98,6 +101,8 @@ pub enum EndpointKind {
     Arpc,
     Thor,
     Shredstream,
+    #[serde(rename = "shredstream_shmem")]
+    ShredstreamShmem,
     Shreder,
     #[serde(rename = "raiden_pulse")]
     RaidenPulse,
@@ -142,6 +147,7 @@ impl EndpointKind {
             EndpointKind::Arpc => "arpc",
             EndpointKind::Thor => "thor",
             EndpointKind::Shredstream => "shredstream",
+            EndpointKind::ShredstreamShmem => "shredstream_shmem",
             EndpointKind::Shreder => "shreder",
             EndpointKind::RaidenPulse => "raiden_pulse",
             EndpointKind::Jetstream => "jetstream",
@@ -176,6 +182,7 @@ impl ConfigToml {
                     influx_org: None,
                     influx_bucket: None,
                     influx_stage: None,
+                    shmem_core: None,
                 },
                 Endpoint {
                     name: "arpc".to_string(),
@@ -185,6 +192,7 @@ impl ConfigToml {
                     influx_org: None,
                     influx_bucket: None,
                     influx_stage: None,
+                    shmem_core: None,
                 },
             ],
             validator_map: None,
@@ -231,5 +239,34 @@ mod tests {
 
         assert_eq!(config.endpoint[0].kind, EndpointKind::RaidenPulse);
         assert_eq!(config.endpoint[0].kind.as_str(), "raiden_pulse");
+    }
+
+    #[test]
+    fn parses_shredstream_shmem_endpoint() {
+        let config: ConfigToml = toml::from_str(
+            r#"
+                [config]
+                transactions = 1000
+                account = "pAMMBay6oceH9fJKBRHGP5D4bD4sWpmSwMn52FMfXEA"
+                commitment = "processed"
+
+                [[endpoint]]
+                name = "Local shreds (shmem)"
+                url = "/dev/shm/shredstream.ring"
+                kind = "shredstream_shmem"
+                shmem_core = 12
+
+                [[endpoint]]
+                name = "Local shreds (gRPC)"
+                url = "http://127.0.0.1:9999"
+                kind = "shredstream"
+            "#,
+        )
+        .unwrap();
+
+        assert_eq!(config.endpoint[0].kind, EndpointKind::ShredstreamShmem);
+        assert_eq!(config.endpoint[0].kind.as_str(), "shredstream_shmem");
+        assert_eq!(config.endpoint[0].shmem_core, Some(12));
+        assert_eq!(config.endpoint[1].shmem_core, None);
     }
 }

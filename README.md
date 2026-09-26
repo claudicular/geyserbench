@@ -68,12 +68,20 @@ kind = "yellowstone"
 name = "Raiden Pulse FRA"
 url = "http://fra.pulse.raiden.wtf:16000"
 kind = "raiden_pulse"
+
+[[endpoint]]
+name = "Local shreds (shmem)"
+url = "/dev/shm/shredstream.ring"   # the proxy's SHMEM_RING_PATH
+kind = "shredstream_shmem"
+shmem_core = 12                     # optional, Linux only
 ```
 
 - `config.transactions` sets how many signatures to evaluate (backend streaming automatically disables itself for extremely large runs).
 - `config.account` is the pubkey monitored for transactions during the benchmark.
 - `config.commitment` accepts `processed`, `confirmed`, or `finalized`.
-- Repeat `[[endpoint]]` blocks for each feed. Supported `kind` values: `yellowstone`, `yellowstone_tx_accounts`, `arpc`, `thor`, `shredstream`, `shreder`, `raiden_pulse`, `jetstream`, and `influxdb`. `x_token` is optional.
+- Repeat `[[endpoint]]` blocks for each feed. Supported `kind` values: `yellowstone`, `yellowstone_tx_accounts`, `arpc`, `thor`, `shredstream`, `shredstream_shmem`, `shreder`, `raiden_pulse`, `jetstream`, and `influxdb`. `x_token` is optional.
+- `shredstream` (proxy gRPC `SubscribeEntries`) and `shredstream_shmem` (the proxy's shared-memory ring, the same feed the arb bot reads via `SHREDSTREAM_SHMEM_PATH`) share one decoder ported from the arb bot: legacy, v0, and SIMD-0385 v1 transactions. A micro-batch's transactions are timestamped once, right after the batch decodes; `config.account` must be a static account key. Decode failures are logged and counted (`decode_errors`) instead of silently dropping batches.
+- For `shredstream_shmem`, `url` is the ring's file path. A dedicated thread busy-polls the ring for the whole run, so it keeps one CPU fully busy; set `shmem_core` to pin it away from validator and bot cores. The reader maps the ring read-only and starts at the current write position, so it can run next to the production bot.
 - For `raiden_pulse`, use the exact URL and port issued by the Raiden dashboard. Pulse applies `config.account` as an `account_required` server-side filter and reports pre-execution transaction detection, so `config.commitment` does not apply to this feed.
 - Peer coverage uses the union of live signatures observed by any configured endpoint. `Seen` and `Coverage %` show how much of that union each endpoint observed, `Unique` counts signatures seen only by that endpoint, and `Missed` counts signatures seen by at least one peer but not that endpoint. Backfill observations are excluded.
 - Prefer `config.duration_secs` runs for representative coverage comparisons. Transaction-target runs stop after the configured number of complete matches and therefore favor signatures shared by every endpoint.

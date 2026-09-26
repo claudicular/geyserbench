@@ -13,7 +13,7 @@ Primary goal: find and validate optimizations and new features in those forks wi
 
 ## Project Overview
 
-GeyserBench is a Rust CLI benchmarking tool for Solana gRPC-compatible data feeds. It benchmarks multiple providers concurrently (`yellowstone`, `arpc`, `thor`, `shredstream`, `shreder`, `raiden_pulse`, `jetstream`, `influxdb`) and tracks:
+GeyserBench is a Rust CLI benchmarking tool for Solana gRPC-compatible data feeds. It benchmarks multiple providers concurrently (`yellowstone`, `yellowstone_tx_accounts`, `arpc`, `thor`, `shredstream`, `shredstream_shmem`, `shreder`, `raiden_pulse`, `jetstream`, `influxdb`) and tracks:
 
 - first-detection share
 - latency percentiles (P50/P95/P99)
@@ -47,7 +47,9 @@ cargo build --release
 - `backend.rs` - WebSocket streaming to backend
 - `utils.rs` - `Comparator` (DashMap-backed aggregation), `ProgressTracker`, helpers
 - `proto.rs` - protobuf module exports (generated at build time)
-- `providers/` - provider implementations
+- `entry_decode.rs` - v1-aware shredstream micro-batch decoder, ported from arb_bot's `integrations/shredstream/entry_decode.rs`; keep the two in sync
+- `shmem_ring.rs` - read-only consumer of the shredstream-proxy shared-memory ring
+- `providers/` - provider implementations (`shredstream.rs` holds `EntryObserver`, shared by the gRPC and shmem shred providers)
 
 ### Provider System
 
@@ -104,7 +106,7 @@ commitment = "processed"  # processed | confirmed | finalized
 [[endpoint]]
 name = "Provider Name"
 url = "https://endpoint.url:port"
-kind = "yellowstone"      # yellowstone | arpc | thor | shredstream | shreder | raiden_pulse | jetstream | influxdb
+kind = "yellowstone"      # yellowstone | yellowstone_tx_accounts | arpc | thor | shredstream | shredstream_shmem | shreder | raiden_pulse | jetstream | influxdb
 x_token = "optional-auth-token"
 ```
 

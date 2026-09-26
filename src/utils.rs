@@ -186,7 +186,7 @@ pub fn percentile(sorted_data: &[f64], p: f64) -> f64 {
     sorted_data[index]
 }
 
-pub fn open_log_file(name: &str) -> std::io::Result<impl Write> {
+pub fn open_log_file(name: &str) -> std::io::Result<impl Write + use<>> {
     let safe_name = sanitize_filename(name);
     let log_filename = format!("transaction_log_{}.txt", safe_name);
     OpenOptions::new()
