@@ -16,14 +16,18 @@ use super::{
 };
 
 #[allow(clippy::all, dead_code)]
-pub mod shreder_binary {
-    include!(concat!(env!("OUT_DIR"), "/shreder_binary.rs"));
+pub mod raiden_binary {
+    include!(concat!(env!("OUT_DIR"), "/raiden_binary.rs"));
 }
 
-use shreder_binary::{
+use raiden_binary::{
     SubscribeBinaryTransactionsRequest, SubscribeRequestFilterBinaryTransactions,
-    shreder_binary_service_client::ShrederBinaryServiceClient,
+    raiden_binary_service_client::RaidenBinaryServiceClient,
 };
+
+/// First byte of a serialized SIMD-0385 v1 transaction; legacy/v0 start with the signature
+/// count (< 0x80). Counting it shows whether Pulse delivers v1 at all.
+const V1_TRANSACTION_PREFIX: u8 = 0x81;
 
 pub struct RaidenPulseProvider;
 
@@ -80,15 +84,16 @@ async fn process_raiden_pulse_endpoint(
 
     info!(endpoint = %endpoint_name, url = %endpoint_url, "Connecting");
 
-    let mut client = ShrederBinaryServiceClient::connect(endpoint_url.clone())
+    let mut client = RaidenBinaryServiceClient::connect(endpoint_url.clone())
         .await
         .unwrap_or_else(|err| fatal_connection_error(&endpoint_name, err));
     info!(endpoint = %endpoint_name, "Connected");
 
     let request = subscription_request(config.account);
     let (mut subscribe_tx, subscribe_rx) =
-        unbounded::<shreder_binary::SubscribeBinaryTransactionsRequest>();
+        unbounded::<raiden_binary::SubscribeBinaryTransactionsRequest>();
     subscribe_tx.send(request).await?;
+    // Pulse authorizes by source IP and reports it here (PERMISSION_DENIED), not at connect.
     let mut stream = client
         .subscribe_binary_transactions(subscribe_rx)
         .await?
@@ -96,6 +101,7 @@ async fn process_raiden_pulse_endpoint(
 
     let mut accumulator = TransactionAccumulator::new();
     let mut transaction_count = 0usize;
+    let mut v1_transactions = 0u64;
 
     loop {
         tokio::select! { biased;
@@ -120,6 +126,13 @@ async fn process_raiden_pulse_endpoint(
                 let wallclock = get_current_timestamp();
                 let elapsed = start_instant.elapsed();
                 let signature = bs58::encode(signature_bytes).into_string();
+
+                if tx.binary_transaction.first() == Some(&V1_TRANSACTION_PREFIX) {
+                    v1_transactions += 1;
+                }
+                if transaction_count == 0 {
+                    info!(endpoint = %endpoint_name, slot = tx_update.slot, "Received first Pulse transaction");
+                }
 
                 if let Some(file) = log_file.as_mut() {
                     write_log_entry(file, wallclock, &endpoint_name, &signature)?;
@@ -159,6 +172,7 @@ async fn process_raiden_pulse_endpoint(
     info!(
         endpoint = %endpoint_name,
         total_transactions = transaction_count,
+        v1_transactions,
         unique_signatures,
         "Stream closed after dispatching transactions"
     );

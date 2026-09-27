@@ -86,7 +86,7 @@ pub trait GeyserProvider: Send + Sync {
 - `arpc.proto`
 - `shredstream.proto`
 - `shreder.proto`
-- `shreder_binary.proto`
+- `raiden_binary.proto` (Raiden Pulse V2)
 - `jetstream.proto`
 - `geyser.proto`
 - `solana-storage.proto`

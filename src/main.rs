@@ -182,7 +182,11 @@ async fn main() -> Result<()> {
             progress: progress_tracker.clone(),
         };
 
-        handles.push(provider.process(endpoint, shared_config, context));
+        let endpoint_name = endpoint.name.clone();
+        handles.push((
+            endpoint_name,
+            provider.process(endpoint, shared_config, context),
+        ));
     }
 
     tokio::spawn({
@@ -212,13 +216,17 @@ async fn main() -> Result<()> {
         }
     });
 
-    for handle in handles {
+    // Await concurrently so a provider that dies early is reported immediately, not after
+    // the endpoints listed before it finish. Target-mode progress stalls without it, since a
+    // signature only counts once every endpoint has seen it.
+    futures_util::future::join_all(handles.into_iter().map(|(endpoint, handle)| async move {
         match handle.await {
             Ok(Ok(_)) => {}
-            Ok(Err(e)) => error!(error = ?e, "Provider task returned error"),
-            Err(e) => error!(error = ?e, "Provider join error"),
+            Ok(Err(e)) => error!(endpoint = %endpoint, error = ?e, "Provider task returned error"),
+            Err(e) => error!(endpoint = %endpoint, error = ?e, "Provider join error"),
         }
-    }
+    }))
+    .await;
 
     comparator.close_sink();
     if let Some(handle) = sink_handle

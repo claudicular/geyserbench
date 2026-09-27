@@ -1,11 +1,15 @@
 syntax = "proto3";
 
-package shreder_binary;
+// Raiden Pulse V2 (https://raiden-4.gitbook.io/raiden.wtf.docs/shred-streaming-decoded-pulse/getting-started).
+// Field numbers match the retired shreder_binary proto; V2 renames the package/service and
+// adds server-side address-lookup-table resolution.
+package raiden_binary;
 
 import "google/protobuf/timestamp.proto";
 
-service ShrederBinaryService {
-  rpc SubscribeBinaryTransactions(stream SubscribeBinaryTransactionsRequest) returns (stream SubscribeBinaryTransactionsResponse);
+service RaidenBinaryService {
+  rpc SubscribeBinaryTransactions(stream SubscribeBinaryTransactionsRequest)
+      returns (stream SubscribeBinaryTransactionsResponse);
 }
 
 message SubscribeBinaryTransactionsRequest {
@@ -21,6 +25,9 @@ message SubscribeBinaryTransactionsResponse {
 message SubscribeUpdateBinaryTransaction {
   BinaryTransaction transaction = 1;
   uint64 slot = 2;
+  // ALT-resolved accounts. Empty for legacy transactions.
+  repeated bytes loaded_writable_addresses = 3;
+  repeated bytes loaded_readonly_addresses = 4;
 }
 
 message SubscribeRequestFilterBinaryTransactions {
@@ -31,5 +38,6 @@ message SubscribeRequestFilterBinaryTransactions {
 
 message BinaryTransaction {
   repeated bytes signatures = 1;
+  // Serialized VersionedTransaction
   bytes binary_transaction = 3;
 }
