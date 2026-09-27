@@ -12,7 +12,7 @@ use crate::{
 
 use super::{
     GeyserProvider, ProviderContext,
-    common::{TransactionAccumulator, fatal_connection_error},
+    common::{GRPC_MAX_MESSAGE_SIZE, TransactionAccumulator, fatal_connection_error},
 };
 
 #[allow(clippy::all, dead_code)]
@@ -66,7 +66,9 @@ async fn process_jetstream_endpoint(
 
     let mut client = JetstreamClient::connect(endpoint_url.clone())
         .await
-        .unwrap_or_else(|err| fatal_connection_error(&endpoint_name, err));
+        .unwrap_or_else(|err| fatal_connection_error(&endpoint_name, err))
+        .max_decoding_message_size(GRPC_MAX_MESSAGE_SIZE)
+        .max_encoding_message_size(GRPC_MAX_MESSAGE_SIZE);
     info!(endpoint = %endpoint_name, "Connected");
 
     let mut transactions: HashMap<String, jetstream::SubscribeRequestFilterTransactions> =

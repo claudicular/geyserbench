@@ -15,6 +15,7 @@ use {
     },
 };
 
+use super::common::GRPC_MAX_MESSAGE_SIZE;
 use crate::proto::geyser::{SubscribeRequest, SubscribeUpdate, geyser_client::GeyserClient};
 
 #[derive(Clone, Debug)]
@@ -117,7 +118,9 @@ impl GeyserGrpcBuilder {
         let interceptor = InterceptorXToken {
             x_token: self.x_token,
         };
-        let geyser = GeyserClient::with_interceptor(channel, interceptor);
+        let geyser = GeyserClient::with_interceptor(channel, interceptor)
+            .max_decoding_message_size(GRPC_MAX_MESSAGE_SIZE)
+            .max_encoding_message_size(GRPC_MAX_MESSAGE_SIZE);
         Ok(GeyserGrpcClient::new(geyser))
     }
 

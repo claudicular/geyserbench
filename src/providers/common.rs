@@ -4,6 +4,12 @@ use tracing::error;
 
 use crate::utils::TransactionData;
 
+/// Max gRPC decode/encode message size for every tonic client built here.
+/// tonic's 4 MiB default ends the stream with `OutOfRange` on large updates
+/// (one grouped `transaction_accounts` message has been seen at ~8 MiB).
+/// The thor provider is excluded: its external client crate does not expose the limit.
+pub const GRPC_MAX_MESSAGE_SIZE: usize = 1024 * 1024 * 1024;
+
 #[derive(Default)]
 pub struct TransactionAccumulator {
     entries: HashMap<String, TransactionData>,
