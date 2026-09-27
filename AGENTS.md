@@ -93,6 +93,8 @@ pub trait GeyserProvider: Send + Sync {
 
 Proto files live in `proto/`, and rebuilds trigger automatically when they change.
 
+`geyser.proto` carries the fork-only `transaction_accounts` request/update on protobuf field **100** (not 12, which upstream uses for `block_footer`), matching the fork plugin branch `add-transaction-accounts-sub-v13` (agave 4.3.0 fork). `kind = "yellowstone_tx_accounts"` therefore requires that plugin; against an older field-12 fork build or an upstream plugin it connects but never receives an update.
+
 ## Configuration
 
 Config is TOML-based (`config.toml`) and is auto-generated on first run if missing.

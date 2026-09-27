@@ -87,7 +87,7 @@ The `build.rs` script compiles 8 proto files at build time using `tonic-prost-bu
 - `geyser.proto`
 - `solana-storage.proto`
 
-`geyser.proto` in this repo includes `transaction_accounts` request/update types used by `yellowstone_tx_accounts` mode.
+`geyser.proto` in this repo includes `transaction_accounts` request/update types used by `yellowstone_tx_accounts` mode. They are on protobuf field **100** (request map and update oneof), matching the fork plugin branch `add-transaction-accounts-sub-v13` (agave 4.3.0 fork, e.g. FRA). Upstream Yellowstone uses field 12 for `block_footer`; the older fork build that carried `transaction_accounts` on 12 is no longer supported. A wire-number regression test lives in `src/providers/yellowstone_tx_accounts.rs`.
 
 ## Configuration
 
@@ -136,6 +136,8 @@ Provider behavior:
 This keeps existing `kind = "yellowstone"` transaction-notify benchmarking unchanged.
 
 Fork note: for `kind = "yellowstone_tx_accounts"`, `config.account` should be a program owner pubkey (not a concrete account pubkey).
+
+Plugin requirement: the endpoint must run the fork plugin that serves `transaction_accounts` on protobuf field 100 (`add-transaction-accounts-sub-v13`, agave 4.3.0 fork). A plugin still on field 12 (or any upstream plugin) silently ignores the subscription, so the provider connects but never records a signature.
 
 ## Metrics and Reporting
 
@@ -234,6 +236,7 @@ For transaction-accounts benchmarking against modified Agave/Yellowstone forks:
 - `--enable-transaction-accounts-notify` must be enabled on validator (default is OFF)
 - Callback source path is `runtime/src/bank.rs` (`notify_transaction_accounts_to_plugins`)
 - Plugin callback shape is `ReplicaTransactionAccountsInfoVersions::V0_0_1`
+- Plugin must carry `transaction_accounts` on protobuf field 100 (branch `add-transaction-accounts-sub-v13`); field 12 is upstream `block_footer`
 - Rebuild plugin `.so` from the exact same Agave commit/toolchain as validator to avoid ABI mismatch and potential segfaults
 
 ## Key Dependencies

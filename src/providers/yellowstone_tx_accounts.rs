@@ -36,6 +36,28 @@ impl GeyserProvider for YellowstoneTxAccountsProvider {
     }
 }
 
+/// Subscribes to grouped `transaction_accounts` updates for transactions that
+/// touch an account owned by `owner`. The fork plugin carries this on protobuf
+/// field 100 (see `proto/geyser.proto`).
+fn tx_accounts_subscribe_request(owner: String, commitment: CommitmentLevel) -> SubscribeRequest {
+    let mut transaction_accounts = HashMap::new();
+    transaction_accounts.insert(
+        "account".to_string(),
+        SubscribeRequestFilterTransactionAccounts {
+            owner: vec![owner],
+            account: vec![],
+            include_all_accounts: Some(true),
+            readonly_mints_only: Some(false),
+        },
+    );
+
+    SubscribeRequest {
+        transaction_accounts,
+        commitment: Some(commitment as i32),
+        ..Default::default()
+    }
+}
+
 async fn process_yellowstone_tx_accounts_endpoint(
     endpoint: Endpoint,
     config: Config,
@@ -92,32 +114,8 @@ async fn process_yellowstone_tx_accounts_endpoint(
     let (mut subscribe_tx, mut stream) = client.subscribe().await?;
     let commitment: CommitmentLevel = config.commitment.into();
 
-    let mut transaction_accounts = HashMap::new();
-    transaction_accounts.insert(
-        "account".to_string(),
-        SubscribeRequestFilterTransactionAccounts {
-            owner: vec![target_owner],
-            account: vec![],
-            include_all_accounts: Some(true),
-            readonly_mints_only: Some(false),
-        },
-    );
-
     subscribe_tx
-        .send(SubscribeRequest {
-            slots: HashMap::default(),
-            accounts: HashMap::default(),
-            transactions: HashMap::default(),
-            transactions_status: HashMap::default(),
-            entry: HashMap::default(),
-            blocks: HashMap::default(),
-            blocks_meta: HashMap::default(),
-            transaction_accounts,
-            commitment: Some(commitment as i32),
-            accounts_data_slice: Vec::default(),
-            ping: None,
-            from_slot: None,
-        })
+        .send(tx_accounts_subscribe_request(target_owner, commitment))
         .await?;
 
     let mut accumulator = TransactionAccumulator::new();
@@ -209,4 +207,106 @@ async fn process_yellowstone_tx_accounts_endpoint(
         "Stream closed after dispatching transactions"
     );
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashMap;
+
+    use prost::Message;
+
+    use super::tx_accounts_subscribe_request;
+    use crate::proto::geyser::{
+        CommitmentLevel, SubscribeRequest, SubscribeRequestFilterTransactionAccounts,
+        SubscribeUpdate, SubscribeUpdateTransactionAccounts, subscribe_update::UpdateOneof,
+    };
+
+    /// Field 100, wire type 2 (length-delimited): varint(100 << 3 | 2) = varint(802).
+    const FIELD_100_TAG: [u8; 2] = [0xA2, 0x06];
+
+    /// Top-level field numbers of an encoded protobuf message.
+    fn top_level_fields(mut bytes: &[u8]) -> Vec<u64> {
+        fn varint(bytes: &mut &[u8]) -> u64 {
+            let (mut value, mut shift) = (0u64, 0);
+            loop {
+                let byte = bytes[0];
+                *bytes = &bytes[1..];
+                value |= u64::from(byte & 0x7f) << shift;
+                if byte & 0x80 == 0 {
+                    return value;
+                }
+                shift += 7;
+            }
+        }
+        let mut fields = Vec::new();
+        while !bytes.is_empty() {
+            let key = varint(&mut bytes);
+            fields.push(key >> 3);
+            match key & 7 {
+                0 => {
+                    varint(&mut bytes);
+                }
+                1 => bytes = &bytes[8..],
+                2 => {
+                    let len = varint(&mut bytes) as usize;
+                    bytes = &bytes[len..];
+                }
+                5 => bytes = &bytes[4..],
+                wire => panic!("unexpected wire type {wire}"),
+            }
+        }
+        fields
+    }
+
+    /// The agave 4.3.0 fork plugin (add-transaction-accounts-sub-v13) carries
+    /// `transaction_accounts` on field 100; field 12 is upstream `block_footer`
+    /// there, so a field-12 subscription matches nothing.
+    #[test]
+    fn transaction_accounts_request_uses_field_100() {
+        let mut transaction_accounts = HashMap::new();
+        transaction_accounts.insert(
+            "account".to_string(),
+            SubscribeRequestFilterTransactionAccounts {
+                owner: vec!["pAMMBay6oceH9fJKBRHGP5D4bD4sWpmSwMn52FMfXEA".to_string()],
+                ..Default::default()
+            },
+        );
+        let request = SubscribeRequest {
+            transaction_accounts,
+            ..Default::default()
+        };
+        let bytes = request.encode_to_vec();
+        assert_eq!(bytes[..2], FIELD_100_TAG, "{bytes:02x?}");
+        assert_eq!(top_level_fields(&bytes), vec![100]);
+
+        let provider_request = tx_accounts_subscribe_request(
+            "pAMMBay6oceH9fJKBRHGP5D4bD4sWpmSwMn52FMfXEA".to_string(),
+            CommitmentLevel::Processed,
+        );
+        let fields = top_level_fields(&provider_request.encode_to_vec());
+        assert!(fields.contains(&100) && !fields.contains(&12), "{fields:?}");
+    }
+
+    #[test]
+    fn transaction_accounts_update_uses_field_100() {
+        let update = SubscribeUpdate {
+            update_oneof: Some(UpdateOneof::TransactionAccounts(
+                SubscribeUpdateTransactionAccounts {
+                    signature: vec![7; 64],
+                    slot: 42,
+                    ..Default::default()
+                },
+            )),
+            ..Default::default()
+        };
+        let bytes = update.encode_to_vec();
+        assert_eq!(bytes[..2], FIELD_100_TAG, "{bytes:02x?}");
+        assert_eq!(top_level_fields(&bytes), vec![100]);
+
+        let decoded = SubscribeUpdate::decode(bytes.as_slice()).unwrap();
+        assert!(matches!(
+            decoded.update_oneof,
+            Some(UpdateOneof::TransactionAccounts(ref tx)) if tx.slot == 42
+        ));
+    }
 }

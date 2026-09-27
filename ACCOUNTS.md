@@ -26,6 +26,10 @@ x_token = "optional-auth-token"
 The provider subscribes with a `transaction_accounts` filter using `config.account` as the **owner** filter.
 In this fork, set `config.account` to a program owner pubkey (not a concrete account pubkey).
 
+## Plugin Requirement (protobuf field 100)
+
+`transaction_accounts` is sent and received on protobuf field **100**, both in `SubscribeRequest` and in the `SubscribeUpdate` oneof. This matches the Yellowstone fork plugin branch `add-transaction-accounts-sub-v13` (agave 4.3.0 fork, deployed on FRA). Upstream Yellowstone now uses field 12 for `block_footer`, so the fork moved off it. An endpoint running an older fork build (field 12) or an upstream plugin ignores the subscription: the provider connects but never records a signature.
+
 ## Runtime Requirements (Agave)
 
 Transaction-accounts callbacks are emitted from `runtime/src/bank.rs` via `notify_transaction_accounts_to_plugins`.

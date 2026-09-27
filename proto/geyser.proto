@@ -42,11 +42,14 @@ message SubscribeRequest {
   map<string, SubscribeRequestFilterBlocks> blocks = 4;
   map<string, SubscribeRequestFilterBlocksMeta> blocks_meta = 5;
   map<string, SubscribeRequestFilterEntry> entry = 8;
-  map<string, SubscribeRequestFilterTransactionAccounts> transaction_accounts = 12;
   optional CommitmentLevel commitment = 6;
   repeated SubscribeRequestAccountsDataSlice accounts_data_slice = 7;
   optional SubscribeRequestPing ping = 9;
   optional uint64 from_slot = 11;
+  // Field 12 is upstream block_footer (Yellowstone v16 / agave 4.3); not used here.
+  // Fork-only (claudicular); moved from 12 because upstream uses 12 for block_footer.
+  // Matches the add-transaction-accounts-sub-v13 plugin (FRA agave 4.3.0 fork).
+  map<string, SubscribeRequestFilterTransactionAccounts> transaction_accounts = 100;
 }
 
 message SubscribeRequestFilterAccounts {
@@ -140,7 +143,9 @@ message SubscribeUpdate {
     SubscribeUpdatePong pong = 9;
     SubscribeUpdateBlockMeta block_meta = 7;
     SubscribeUpdateEntry entry = 8;
-    SubscribeUpdateTransactionAccounts transaction_accounts = 12;
+    // Field 12 is upstream block_footer; not used here.
+    // Fork-only (claudicular); see SubscribeRequest.transaction_accounts.
+    SubscribeUpdateTransactionAccounts transaction_accounts = 100;
   }
   google.protobuf.Timestamp created_at = 11;
 }
@@ -232,6 +237,8 @@ message SubscribeUpdateTransactionAccounts {
   uint64 slot = 2;
   uint64 index = 3;
   repeated SubscribeUpdateAccountInfo accounts = 4;
+  // Bank instance that committed the transaction (fork plugin); unused here.
+  uint64 bank_id = 5;
 }
 
 message SubscribeUpdatePing {}
