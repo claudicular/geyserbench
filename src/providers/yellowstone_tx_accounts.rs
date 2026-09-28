@@ -46,7 +46,8 @@ fn tx_accounts_subscribe_request(owner: String, commitment: CommitmentLevel) -> 
         SubscribeRequestFilterTransactionAccounts {
             owner: vec![owner],
             account: vec![],
-            include_all_accounts: Some(true),
+            // Owner-matched accounts only, as the bot requests; all-accounts messages carry multi-MB non-matching accounts that inflate latency.
+            include_all_accounts: None,
             readonly_mints_only: Some(false),
         },
     );
@@ -285,6 +286,12 @@ mod tests {
         );
         let fields = top_level_fields(&provider_request.encode_to_vec());
         assert!(fields.contains(&100) && !fields.contains(&12), "{fields:?}");
+        assert!(
+            provider_request
+                .transaction_accounts
+                .values()
+                .all(|filter| filter.include_all_accounts.is_none())
+        );
     }
 
     #[test]
