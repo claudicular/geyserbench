@@ -4,7 +4,7 @@ GeyserBench benchmarks the speed and reliability of Solana gRPC-compatible data 
 
 ## Highlights
 
-- Benchmark multiple feeds at once (Yellowstone, aRPC, Thor, Shredstream, Raiden Pulse, Jetstream, and custom gRPC endpoints)
+- Benchmark multiple feeds at once (Yellowstone, Yellowstone deshred, aRPC, Thor, Shredstream, Raiden Pulse, Jetstream, and custom gRPC endpoints)
 - Track first-detection share, latency percentiles (P50/P95/P99), peer coverage, valid transaction counts, and backfill events
 - Stream results to the SolStack backend for shareable reports, or keep runs local with a single flag
 - Generate a ready-to-edit TOML config on first launch; supply auth tokens and endpoints without code changes
@@ -65,6 +65,11 @@ x_token = "optional-auth-token"
 kind = "yellowstone"
 
 [[endpoint]]
+name = "Local deshred"
+url = "http://127.0.0.1:10000"
+kind = "yellowstone_deshred"
+
+[[endpoint]]
 name = "Raiden Pulse FRA"
 url = "http://fra.pulse.raiden.wtf:16000"
 kind = "raiden_pulse"
@@ -79,14 +84,29 @@ shmem_core = 12                     # optional, Linux only
 - `config.transactions` sets how many signatures to evaluate (backend streaming automatically disables itself for extremely large runs).
 - `config.account` is the pubkey monitored for transactions during the benchmark.
 - `config.commitment` accepts `processed`, `confirmed`, or `finalized`.
-- Repeat `[[endpoint]]` blocks for each feed. Supported `kind` values: `yellowstone`, `yellowstone_tx_accounts`, `arpc`, `thor`, `shredstream`, `shredstream_shmem`, `shreder`, `raiden_pulse`, `jetstream`, and `influxdb`. `x_token` is optional.
+- Repeat `[[endpoint]]` blocks for each feed. Supported `kind` values: `yellowstone`, `yellowstone_tx_accounts`, `yellowstone_deshred`, `arpc`, `thor`, `shredstream`, `shredstream_shmem`, `shreder`, `raiden_pulse`, `jetstream`, and `influxdb`. `x_token` is optional.
 - `shredstream` (proxy gRPC `SubscribeEntries`) and `shredstream_shmem` (the proxy's shared-memory ring, the same feed the arb bot reads via `SHREDSTREAM_SHMEM_PATH`) share one decoder ported from the arb bot: legacy, v0, and SIMD-0385 v1 transactions. A micro-batch's transactions are timestamped once, right after the batch decodes; `config.account` must be a static account key. Decode failures are logged and counted (`decode_errors`) instead of silently dropping batches.
 - `yellowstone_tx_accounts` subscribes to the fork-only grouped `transaction_accounts` stream and uses `config.account` as an owner (program) filter. It requires the Yellowstone fork plugin that serves that stream on protobuf field 100 (`add-transaction-accounts-sub-v13`, agave 4.3.0 fork); upstream plugins and older field-12 fork builds never deliver updates. See [ACCOUNTS.md](./ACCOUNTS.md).
+- `yellowstone_deshred` subscribes to Yellowstone's `SubscribeDeshred` RPC: pre-execution transactions that agave emits from `CompletedDataSetsService` right after shreds are inserted into the blockstore, before replay. It needs a validator and Yellowstone plugin that serve `SubscribeDeshred` with deshred notifications on, such as the fork branch `add-transaction-accounts-sub-v13`. A plugin without the RPC returns UNIMPLEMENTED. The provider sends one filter, `account_include = [config.account]` with `vote = false`, and requests no update-parent or slot messages. The plugin matches that filter against static keys plus lookup-table addresses resolved on the rooted bank, so it can see signatures that the static-key shred providers miss. A table created or extended after the current root does not resolve, and those transactions match on static keys only. Deshred is pre-execution, so `config.commitment` does not apply and transactions that later fail are included. The server pings every 10s and the provider answers each ping. The server drops a client that falls behind, and the run then ends with a stream error.
 - For `shredstream_shmem`, `url` is the ring's file path. A dedicated thread busy-polls the ring for the whole run, so it keeps one CPU fully busy; set `shmem_core` to pin it away from validator and bot cores. The reader maps the ring read-only and starts at the current write position, so it can run next to the production bot.
 - For `raiden_pulse`, use the exact URL and port issued by the Raiden dashboard (e.g. `http://fra.pulse.raiden.wtf:16000`). The client speaks the Pulse V2 `raiden_binary` proto; the retired `shreder_binary` service now returns UNIMPLEMENTED. Access is by source-IP whitelist (a non-whitelisted host gets PERMISSION_DENIED right after connecting), so `x_token` is unused. Pulse applies `config.account` as an `account_required` server-side filter over static and lookup-table-resolved accounts, and reports pre-execution transaction detection, so `config.commitment` does not apply. The shred providers match static keys only, so Pulse can see signatures they don't. The end-of-run log counts v1 transactions Pulse delivered (`v1_transactions`).
 - Peer coverage uses the union of live signatures observed by any configured endpoint. `Seen` and `Coverage %` show how much of that union each endpoint observed, `Unique` counts signatures seen only by that endpoint, and `Missed` counts signatures seen by at least one peer but not that endpoint. Backfill observations are excluded.
 - Prefer `config.duration_secs` runs for representative coverage comparisons. Transaction-target runs stop after the configured number of complete matches and therefore favor signatures shared by every endpoint.
 - When `config.rpc_url` and `[validator_map]` are configured, the final report repeats peer coverage for `in`, `out`, and `unknown` leader regions. See [the validator-map input contract](./docs/validator-map.md).
+
+## Per-signature CSV
+
+Set `GEYSERBENCH_SIG_CSV=/path/to/sigs.csv` to write every (endpoint, signature) observation after the run ends, one row each:
+
+```
+endpoint,signature,slot,elapsed_ns,wallclock_secs
+```
+
+- `elapsed_ns` is the monotonic time since the run started, the value the comparator uses to rank endpoints. It is comparable across endpoints within one run.
+- `wallclock_secs` is the receive time in Unix seconds. For `influxdb` it is the logged stage timestamp.
+- `slot` is empty for providers that do not report one (`thor`, `influxdb`).
+- The file holds each endpoint's earliest observation of every signature it saw, including signatures that other endpoints missed. Rows are sorted by signature, then endpoint.
+- The file is written once at the end of the run, including after a Ctrl+C. Nothing is written while providers are receiving.
 
 ## CLI Options
 

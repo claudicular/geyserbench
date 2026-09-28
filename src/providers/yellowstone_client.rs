@@ -16,7 +16,10 @@ use {
 };
 
 use super::common::GRPC_MAX_MESSAGE_SIZE;
-use crate::proto::geyser::{SubscribeRequest, SubscribeUpdate, geyser_client::GeyserClient};
+use crate::proto::geyser::{
+    SubscribeDeshredRequest, SubscribeRequest, SubscribeUpdate, SubscribeUpdateDeshred,
+    geyser_client::GeyserClient,
+};
 
 #[derive(Clone, Debug)]
 pub struct InterceptorXToken {
@@ -78,6 +81,26 @@ impl GeyserGrpcClient {
         }
         let response: Response<Streaming<SubscribeUpdate>> =
             self.geyser.subscribe(subscribe_rx).await?;
+        Ok((subscribe_tx, response.into_inner()))
+    }
+
+    /// Opens the `SubscribeDeshred` stream (pre-execution transactions),
+    /// queueing `request` as the first stream message. Message-size limits come from
+    /// the shared client built in `GeyserGrpcBuilder::build`.
+    pub async fn subscribe_deshred(
+        &mut self,
+        request: SubscribeDeshredRequest,
+    ) -> GeyserGrpcClientResult<(
+        impl Sink<SubscribeDeshredRequest, Error = mpsc::SendError>,
+        impl Stream<Item = Result<SubscribeUpdateDeshred, Status>>,
+    )> {
+        let (mut subscribe_tx, subscribe_rx) = mpsc::unbounded();
+        subscribe_tx
+            .send(request)
+            .await
+            .map_err(GeyserGrpcClientError::SubscribeSendError)?;
+        let response: Response<Streaming<SubscribeUpdateDeshred>> =
+            self.geyser.subscribe_deshred(subscribe_rx).await?;
         Ok((subscribe_tx, response.into_inner()))
     }
 

@@ -98,6 +98,8 @@ pub enum EndpointKind {
     Yellowstone,
     #[serde(rename = "yellowstone_tx_accounts")]
     YellowstoneTxAccounts,
+    #[serde(rename = "yellowstone_deshred")]
+    YellowstoneDeshred,
     Arpc,
     Thor,
     Shredstream,
@@ -144,6 +146,7 @@ impl EndpointKind {
         match self {
             EndpointKind::Yellowstone => "yellowstone",
             EndpointKind::YellowstoneTxAccounts => "yellowstone_tx_accounts",
+            EndpointKind::YellowstoneDeshred => "yellowstone_deshred",
             EndpointKind::Arpc => "arpc",
             EndpointKind::Thor => "thor",
             EndpointKind::Shredstream => "shredstream",
@@ -239,6 +242,27 @@ mod tests {
 
         assert_eq!(config.endpoint[0].kind, EndpointKind::RaidenPulse);
         assert_eq!(config.endpoint[0].kind.as_str(), "raiden_pulse");
+    }
+
+    #[test]
+    fn parses_yellowstone_deshred_endpoint_kind() {
+        let config: ConfigToml = toml::from_str(
+            r#"
+                [config]
+                transactions = 1000
+                account = "pAMMBay6oceH9fJKBRHGP5D4bD4sWpmSwMn52FMfXEA"
+                commitment = "processed"
+
+                [[endpoint]]
+                name = "Local deshred"
+                url = "http://127.0.0.1:10000"
+                kind = "yellowstone_deshred"
+            "#,
+        )
+        .unwrap();
+
+        assert_eq!(config.endpoint[0].kind, EndpointKind::YellowstoneDeshred);
+        assert_eq!(config.endpoint[0].kind.as_str(), "yellowstone_deshred");
     }
 
     #[test]

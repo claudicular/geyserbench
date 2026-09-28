@@ -1,8 +1,9 @@
 use dashmap::{DashMap, DashSet};
 use std::{
     collections::HashMap,
-    fs::OpenOptions,
-    io::Write,
+    fs::{File, OpenOptions},
+    io::{BufWriter, Write},
+    path::Path,
     sync::{
         Mutex,
         atomic::{AtomicUsize, Ordering},
@@ -165,6 +166,54 @@ impl ProgressTracker {
     }
 }
 
+/// Env var naming the optional per-(endpoint, signature) CSV written at the end of a run.
+pub const SIG_CSV_ENV: &str = "GEYSERBENCH_SIG_CSV";
+
+/// Writes every (endpoint, signature) observation held by the comparator as
+/// `endpoint,signature,slot,elapsed_ns,wallclock_secs`, sorted by signature then endpoint.
+/// `elapsed_ns` is the monotonic `elapsed_since_start` the comparator ranks by.
+/// Called once after all providers finished, never on the receive path.
+pub fn write_signature_csv(comparator: &Comparator, path: &Path) -> std::io::Result<usize> {
+    let mut rows: Vec<(String, String, Option<u64>, u128, f64)> = Vec::new();
+    for entry in comparator.iter() {
+        for (endpoint, data) in entry.value() {
+            rows.push((
+                entry.key().clone(),
+                endpoint.clone(),
+                data.slot,
+                data.elapsed_since_start.as_nanos(),
+                data.wallclock_secs,
+            ));
+        }
+    }
+    rows.sort_unstable_by(|a, b| a.0.cmp(&b.0).then_with(|| a.1.cmp(&b.1)));
+
+    let mut out = BufWriter::new(File::create(path)?);
+    writeln!(out, "endpoint,signature,slot,elapsed_ns,wallclock_secs")?;
+    for (signature, endpoint, slot, elapsed_ns, wallclock_secs) in &rows {
+        let slot = slot.map(|slot| slot.to_string()).unwrap_or_default();
+        writeln!(
+            out,
+            "{},{},{},{},{:.6}",
+            csv_field(endpoint),
+            signature,
+            slot,
+            elapsed_ns,
+            wallclock_secs
+        )?;
+    }
+    out.flush()?;
+    Ok(rows.len())
+}
+
+fn csv_field(value: &str) -> std::borrow::Cow<'_, str> {
+    if value.contains([',', '"', '\n', '\r']) {
+        format!("\"{}\"", value.replace('"', "\"\"")).into()
+    } else {
+        value.into()
+    }
+}
+
 pub fn get_current_timestamp() -> f64 {
     let now = SystemTime::now();
     let since_epoch: Duration = match now.duration_since(UNIX_EPOCH) {
@@ -220,5 +269,53 @@ fn sanitize_filename(name: &str) -> String {
         "endpoint".to_string()
     } else {
         trimmed.to_string()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Comparator, TransactionData, write_signature_csv};
+    use std::{collections::HashMap, time::Duration};
+
+    fn observation(elapsed_ns: u64, slot: Option<u64>) -> TransactionData {
+        TransactionData {
+            wallclock_secs: 1_790_000_000.25,
+            elapsed_since_start: Duration::from_nanos(elapsed_ns),
+            start_wallclock_secs: 1_790_000_000.0,
+            slot,
+        }
+    }
+
+    #[test]
+    fn signature_csv_has_one_row_per_endpoint_observation() {
+        let comparator = Comparator::new();
+        comparator.add_batch(
+            "deshred",
+            HashMap::from([
+                ("sigB".to_string(), observation(2_000, Some(11))),
+                ("sigA".to_string(), observation(1_500, Some(10))),
+            ]),
+        );
+        comparator.add_batch(
+            "grpc, \"fra\"",
+            HashMap::from([("sigA".to_string(), observation(9_000, None))]),
+        );
+
+        let path = std::env::temp_dir().join(format!(
+            "geyserbench_sig_csv_test_{}.csv",
+            std::process::id()
+        ));
+        let rows = write_signature_csv(&comparator, &path).unwrap();
+        let content = std::fs::read_to_string(&path).unwrap();
+        let _ = std::fs::remove_file(&path);
+
+        assert_eq!(rows, 3);
+        assert_eq!(
+            content,
+            "endpoint,signature,slot,elapsed_ns,wallclock_secs\n\
+             deshred,sigA,10,1500,1790000000.250000\n\
+             \"grpc, \"\"fra\"\"\",sigA,,9000,1790000000.250000\n\
+             deshred,sigB,11,2000,1790000000.250000\n"
+        );
     }
 }

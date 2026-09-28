@@ -24,6 +24,7 @@ pub mod shredstream_shmem;
 pub mod thor;
 pub mod yellowstone;
 mod yellowstone_client;
+pub mod yellowstone_deshred;
 pub mod yellowstone_tx_accounts;
 
 pub trait GeyserProvider: Send + Sync {
@@ -40,6 +41,9 @@ pub fn create_provider(kind: &EndpointKind) -> Box<dyn GeyserProvider> {
         EndpointKind::Yellowstone => Box::new(yellowstone::YellowstoneProvider),
         EndpointKind::YellowstoneTxAccounts => {
             Box::new(yellowstone_tx_accounts::YellowstoneTxAccountsProvider)
+        }
+        EndpointKind::YellowstoneDeshred => {
+            Box::new(yellowstone_deshred::YellowstoneDeshredProvider)
         }
         EndpointKind::Arpc => Box::new(arpc::ArpcProvider),
         EndpointKind::Thor => Box::new(thor::ThorProvider),

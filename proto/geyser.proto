@@ -9,6 +9,8 @@ package geyser;
 
 service Geyser {
   rpc Subscribe(stream SubscribeRequest) returns (stream SubscribeUpdate) {}
+  // Pre-execution transactions; copied from the fork plugin (add-transaction-accounts-sub-v13).
+  rpc SubscribeDeshred(stream SubscribeDeshredRequest) returns (stream SubscribeUpdateDeshred) {}
   rpc SubscribeReplayInfo(SubscribeReplayInfoRequest) returns (SubscribeReplayInfoResponse) {}
   rpc Ping(PingRequest) returns (PongResponse) {}
   rpc GetLatestBlockhash(GetLatestBlockhashRequest) returns (GetLatestBlockhashResponse) {}
@@ -122,6 +124,20 @@ message SubscribeRequestFilterBlocksMeta {}
 
 message SubscribeRequestFilterEntry {}
 
+// Filter for deshred transactions (transactions received before execution).
+// Deshred transactions are received when entries are formed from shreds,
+// BEFORE any execution occurs. No TransactionStatusMeta is available.
+// Address lookup tables are resolved, so both static account keys and
+// dynamically loaded addresses (from ALTs) are available for filtering.
+message SubscribeRequestFilterDeshredTransactions {
+  optional bool vote = 1;
+  repeated string account_include = 2;
+  repeated string account_exclude = 3;
+  repeated string account_required = 4;
+  // Include SubscribeUpdateDeshredUpdateParent updates. Omitted or false sends transactions only.
+  optional bool include_update_parent = 5;
+}
+
 message SubscribeRequestAccountsDataSlice {
   uint64 offset = 1;
   uint64 length = 2;
@@ -129,6 +145,14 @@ message SubscribeRequestAccountsDataSlice {
 
 message SubscribeRequestPing {
   int32 id = 1;
+}
+
+// Request message for the SubscribeDeshred RPC (fork plugin).
+// A request carrying `ping` is answered with a pong and leaves the filter unchanged.
+message SubscribeDeshredRequest {
+  map<string, SubscribeRequestFilterDeshredTransactions> deshred_transactions = 1;
+  optional SubscribeRequestPing ping = 2;
+  map<string, SubscribeRequestFilterSlots> slots = 3;
 }
 
 message SubscribeUpdate {
@@ -172,6 +196,9 @@ message SubscribeUpdateSlot {
   optional uint64 parent = 2;
   SlotStatus status = 3;
   optional string dead_error = 4;
+
+  // FIRST_SHRED_RECEIVED and COMPLETED slot status does not belong to any bank.
+  optional uint64 bank_id = 5;
 }
 
 message SubscribeUpdateTransaction {
@@ -241,10 +268,46 @@ message SubscribeUpdateTransactionAccounts {
   uint64 bank_id = 5;
 }
 
+// Precedes transactions from the data set at this UpdateParent FEC-set boundary.
+message SubscribeUpdateDeshredUpdateParent {
+  uint64 slot = 1;
+  uint32 update_parent_fec_set_index = 2;
+  uint64 parent_slot = 3;
+  bytes parent_block_id = 4;
+}
+
+message SubscribeUpdateDeshredTransaction {
+  SubscribeUpdateDeshredTransactionInfo transaction = 1;
+  uint64 slot = 2;
+}
+
+message SubscribeUpdateDeshredTransactionInfo {
+  bytes signature = 1;
+  bool is_vote = 2;
+  solana.storage.ConfirmedBlock.Transaction transaction = 3;
+  repeated bytes loaded_writable_addresses = 4;
+  repeated bytes loaded_readonly_addresses = 5;
+  uint32 completed_data_set_starting_shred_index = 6;
+  uint32 completed_data_set_ending_shred_index_exclusive = 7;
+}
+
 message SubscribeUpdatePing {}
 
 message SubscribeUpdatePong {
   int32 id = 1;
+}
+
+message SubscribeUpdateDeshred {
+  repeated string filters = 1;
+  oneof update_oneof {
+    SubscribeUpdateDeshredTransaction deshred_transaction = 2;
+    SubscribeUpdatePing ping = 3;
+    SubscribeUpdatePong pong = 4;
+    // field 5 is reserved for created_at (below the oneof)
+    SubscribeUpdateSlot slot = 6;
+    SubscribeUpdateDeshredUpdateParent deshred_update_parent = 7;
+  }
+  google.protobuf.Timestamp created_at = 5;
 }
 
 message SubscribeReplayInfoRequest {}

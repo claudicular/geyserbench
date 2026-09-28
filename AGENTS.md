@@ -13,7 +13,7 @@ Primary goal: find and validate optimizations and new features in those forks wi
 
 ## Project Overview
 
-GeyserBench is a Rust CLI benchmarking tool for Solana gRPC-compatible data feeds. It benchmarks multiple providers concurrently (`yellowstone`, `yellowstone_tx_accounts`, `arpc`, `thor`, `shredstream`, `shredstream_shmem`, `shreder`, `raiden_pulse`, `jetstream`, `influxdb`) and tracks:
+GeyserBench is a Rust CLI benchmarking tool for Solana gRPC-compatible data feeds. It benchmarks multiple providers concurrently (`yellowstone`, `yellowstone_tx_accounts`, `yellowstone_deshred`, `arpc`, `thor`, `shredstream`, `shredstream_shmem`, `shreder`, `raiden_pulse`, `jetstream`, `influxdb`) and tracks:
 
 - first-detection share
 - latency percentiles (P50/P95/P99)
@@ -95,6 +95,10 @@ Proto files live in `proto/`, and rebuilds trigger automatically when they chang
 
 `geyser.proto` carries the fork-only `transaction_accounts` request/update on protobuf field **100** (not 12, which upstream uses for `block_footer`), matching the fork plugin branch `add-transaction-accounts-sub-v13` (agave 4.3.0 fork). `kind = "yellowstone_tx_accounts"` therefore requires that plugin; against an older field-12 fork build or an upstream plugin it connects but never receives an update.
 
+`geyser.proto` also carries the `SubscribeDeshred` RPC and its messages, with names and field numbers identical to the fork's proto (`add-transaction-accounts-sub-v13`). `kind = "yellowstone_deshred"` uses it: pre-execution transactions from agave's blockstore insert (`CompletedDataSetsService`, before replay), filtered server-side with `account_include = [config.account]`, `vote = false`, and matched against static plus ALT-resolved accounts (ALTs resolve on the rooted bank). It needs a plugin that serves `SubscribeDeshred`. Wire tests live in `src/providers/yellowstone_deshred.rs`.
+
+`GEYSERBENCH_SIG_CSV=<path>` writes one `endpoint,signature,slot,elapsed_ns,wallclock_secs` row per (endpoint, signature) observation after all providers finish (`utils::write_signature_csv`). It never writes during the run.
+
 ## Configuration
 
 Config is TOML-based (`config.toml`) and is auto-generated on first run if missing.
@@ -108,7 +112,7 @@ commitment = "processed"  # processed | confirmed | finalized
 [[endpoint]]
 name = "Provider Name"
 url = "https://endpoint.url:port"
-kind = "yellowstone"      # yellowstone | yellowstone_tx_accounts | arpc | thor | shredstream | shredstream_shmem | shreder | raiden_pulse | jetstream | influxdb
+kind = "yellowstone"      # yellowstone | yellowstone_tx_accounts | yellowstone_deshred | arpc | thor | shredstream | shredstream_shmem | shreder | raiden_pulse | jetstream | influxdb
 x_token = "optional-auth-token"
 ```
 

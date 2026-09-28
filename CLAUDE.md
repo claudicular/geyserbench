@@ -10,6 +10,7 @@ Supported endpoint kinds:
 
 - `yellowstone` (transaction notify mode)
 - `yellowstone_tx_accounts` (transaction-accounts notify mode)
+- `yellowstone_deshred` (pre-execution transactions from agave's blockstore insert; needs a plugin serving `SubscribeDeshred`; matched with ALT-resolved accounts)
 - `arpc`
 - `thor`
 - `shredstream` (proxy gRPC entries)
@@ -104,7 +105,7 @@ duration_secs = 3600                             # Optional: duration mode (see 
 [[endpoint]]
 name = "Provider Name"
 url = "https://endpoint.url:port"
-kind = "yellowstone"                             # yellowstone | yellowstone_tx_accounts | arpc | thor | shredstream | shredstream_shmem | shreder | raiden_pulse | jetstream | influxdb
+kind = "yellowstone"                             # yellowstone | yellowstone_tx_accounts | yellowstone_deshred | arpc | thor | shredstream | shredstream_shmem | shreder | raiden_pulse | jetstream | influxdb
 x_token = "optional-auth-token"
 
 # Optional: validator location input (see docs/validator-map.md)
@@ -139,6 +140,20 @@ Fork note: for `kind = "yellowstone_tx_accounts"`, `config.account` should be a 
 
 Plugin requirement: the endpoint must run the fork plugin that serves `transaction_accounts` on protobuf field 100 (`add-transaction-accounts-sub-v13`, agave 4.3.0 fork). A plugin still on field 12 (or any upstream plugin) silently ignores the subscription, so the provider connects but never records a signature.
 
+## Yellowstone Deshred Mode
+
+`kind = "yellowstone_deshred"` subscribes to Yellowstone's `SubscribeDeshred` RPC (`rpc SubscribeDeshred(stream SubscribeDeshredRequest) returns (stream SubscribeUpdateDeshred)`). `proto/geyser.proto` copies it and its messages with the fork's field numbers.
+
+- Source: agave's `CompletedDataSetsService` emits each transaction right after its shreds are inserted into the blockstore, before replay. No execution status exists, so transactions that later fail are included and `config.commitment` does not apply.
+- Filter: one `SubscribeRequestFilterDeshredTransactions` named `account`, with `account_include = [config.account]` and `vote = false`. `include_update_parent` is unset and no `slots` filter is sent, so only transactions and pings arrive.
+- Matching: server-side, against static keys plus addresses loaded from lookup tables, which the plugin resolves on the rooted bank (best effort). A table newer than the root does not resolve, and that transaction matches on static keys only. The provider does not re-check keys on the client.
+- Signature and slot: `deshred_transaction.transaction.signature` (the first signature) and `deshred_transaction.slot`. The receive timestamp is taken before any per-transaction work.
+- Keepalive: the server pings every 10s and needs no reply. The provider answers with a ping-only request, which the server handles as a pong and which does not replace the filter. The server disconnects a client that lags (`Status::internal`), and the provider then logs an error and ends its stream.
+
+## Per-signature CSV (`GEYSERBENCH_SIG_CSV`)
+
+When `GEYSERBENCH_SIG_CSV=<path>` is set, `main.rs` calls `utils::write_signature_csv` after all providers have merged their batches into the comparator. It writes one row per (endpoint, signature): `endpoint,signature,slot,elapsed_ns,wallclock_secs`. `elapsed_ns` is `elapsed_since_start`, the monotonic value the comparator ranks by. Keep the CSV off the receive path.
+
 ## Metrics and Reporting
 
 - Summary output includes per-endpoint **Mode** (`EndpointKind::as_str()`)
@@ -155,7 +170,7 @@ layered, individually optional features make the bench leader/region aware:
 
 - `TransactionData` carries `slot: Option<u64>`. Providers that expose slot on
   the wire populate it: `yellowstone`, `yellowstone_tx_accounts`,
-  `shredstream`, `shredstream_shmem`, `shreder`, `raiden_pulse`, `jetstream`, `arpc`. `thor` and `influxdb` record
+  `yellowstone_deshred`, `shredstream`, `shredstream_shmem`, `shreder`, `raiden_pulse`, `jetstream`, `arpc`. `thor` and `influxdb` record
   `None`.
 - With `config.rpc_url` set, `LeaderResolver` (leader.rs) fetches
   `getEpochInfo` + `getLeaderSchedule` once per epoch (cached, arithmetic

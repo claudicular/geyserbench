@@ -26,7 +26,7 @@ mod utils;
 use anyhow::{Result, anyhow};
 use tracing::{debug, error, info, warn};
 use tracing_subscriber::EnvFilter;
-use utils::{Comparator, ProgressTracker, get_current_timestamp};
+use utils::{Comparator, ProgressTracker, SIG_CSV_ENV, get_current_timestamp, write_signature_csv};
 
 const DEFAULT_CONFIG_PATH: &str = "config.toml";
 
@@ -233,6 +233,17 @@ async fn main() -> Result<()> {
         && let Err(err) = handle.await
     {
         warn!(error = ?err, "InfluxDB sink task join error");
+    }
+
+    // Raw per-signature dump, written only after every provider has merged its batch.
+    if let Some(path) = env::var_os(SIG_CSV_ENV).filter(|path| !path.is_empty()) {
+        let path = std::path::PathBuf::from(path);
+        match write_signature_csv(comparator.as_ref(), &path) {
+            Ok(rows) => info!(path = %path.display(), rows, "Wrote per-signature CSV"),
+            Err(err) => {
+                error!(path = %path.display(), error = %err, "Failed to write per-signature CSV")
+            }
+        }
     }
 
     let run_aborted = aborted.load(Ordering::Acquire);
