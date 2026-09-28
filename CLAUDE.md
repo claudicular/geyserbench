@@ -152,7 +152,7 @@ Plugin requirement: the endpoint must run the fork plugin that serves `transacti
 
 ## Per-signature CSV (`GEYSERBENCH_SIG_CSV`)
 
-When `GEYSERBENCH_SIG_CSV=<path>` is set, `main.rs` calls `utils::write_signature_csv` after all providers have merged their batches into the comparator. It writes one row per (endpoint, signature): `endpoint,signature,slot,elapsed_ns,wallclock_secs`. `elapsed_ns` is `elapsed_since_start`, the monotonic value the comparator ranks by. Keep the CSV off the receive path.
+When `GEYSERBENCH_SIG_CSV=<path>` is set, `main.rs` calls `utils::write_signature_csv` after all providers have merged their batches into the comparator. It writes one row per (endpoint, signature): `endpoint,signature,slot,elapsed_ns,wallclock_secs,wallclock_unix_ns,server_created_unix_ns`. `elapsed_ns` is `elapsed_since_start`, the monotonic value the comparator ranks by. `wallclock_unix_ns` (`TransactionData::wallclock_unix_ns`) is taken from the same `SystemTime` read as `wallclock_secs`, because `f64` seconds resolve only ~240 ns. `server_created_unix_ns` is the Yellowstone `created_at` (`providers::common::timestamp_unix_ns`); only the three Yellowstone providers set it. Keep the CSV off the receive path.
 
 ## Metrics and Reporting
 

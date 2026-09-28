@@ -320,9 +320,13 @@ async fn process_influxdb_endpoint(
 
                             let tx_data = TransactionData {
                                 wallclock_secs: influx_timestamp_secs,
+                                wallclock_unix_ns: u64::try_from(influx_timestamp_us)
+                                    .unwrap_or_default()
+                                    .saturating_mul(1_000),
                                 elapsed_since_start: elapsed,
                                 start_wallclock_secs,
                                 slot: None,
+                                server_created_unix_ns: None,
                             };
 
                             let updated = accumulator.record(signature.clone(), tx_data.clone());

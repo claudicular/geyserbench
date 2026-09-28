@@ -2,7 +2,7 @@ use std::{error::Error, sync::atomic::Ordering, time::Duration};
 
 use crate::{
     config::{Config, Endpoint},
-    utils::{TransactionData, get_current_timestamp, open_log_file, write_log_entry},
+    utils::{TransactionData, open_log_file, unix_ns_to_secs, unix_time_ns, write_log_entry},
 };
 
 use futures_util::StreamExt;
@@ -103,8 +103,9 @@ async fn process_thor_endpoint(
                     .any(|key| key.as_slice() == account_pubkey.as_ref());
 
                 if has_account {
-                    let wallclock = get_current_timestamp();
+                    let wallclock_unix_ns = unix_time_ns();
                     let elapsed = start_instant.elapsed();
+                    let wallclock = unix_ns_to_secs(wallclock_unix_ns);
                     let signature = bs58::encode(sig_bytes).into_string();
 
                     if let Some(file) = log_file.as_mut() {
@@ -113,9 +114,11 @@ async fn process_thor_endpoint(
 
                     let tx_data = TransactionData {
                         wallclock_secs: wallclock,
+                        wallclock_unix_ns,
                         elapsed_since_start: elapsed,
                         start_wallclock_secs,
                         slot: None,
+                        server_created_unix_ns: None,
                     };
 
                     let updated = accumulator.record(

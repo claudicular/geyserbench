@@ -97,7 +97,7 @@ Proto files live in `proto/`, and rebuilds trigger automatically when they chang
 
 `geyser.proto` also carries the `SubscribeDeshred` RPC and its messages, with names and field numbers identical to the fork's proto (`add-transaction-accounts-sub-v13`). `kind = "yellowstone_deshred"` uses it: pre-execution transactions from agave's blockstore insert (`CompletedDataSetsService`, before replay), filtered server-side with `account_include = [config.account]`, `vote = false`, and matched against static plus ALT-resolved accounts (ALTs resolve on the rooted bank). It needs a plugin that serves `SubscribeDeshred`. Wire tests live in `src/providers/yellowstone_deshred.rs`.
 
-`GEYSERBENCH_SIG_CSV=<path>` writes one `endpoint,signature,slot,elapsed_ns,wallclock_secs` row per (endpoint, signature) observation after all providers finish (`utils::write_signature_csv`). It never writes during the run.
+`GEYSERBENCH_SIG_CSV=<path>` writes one `endpoint,signature,slot,elapsed_ns,wallclock_secs,wallclock_unix_ns,server_created_unix_ns` row per (endpoint, signature) observation after all providers finish (`utils::write_signature_csv`). It never writes during the run.
 
 ## Configuration
 

@@ -12,12 +12,12 @@ use crate::proto::geyser::{
 
 use crate::{
     config::{Config, Endpoint},
-    utils::{TransactionData, get_current_timestamp, open_log_file, write_log_entry},
+    utils::{TransactionData, open_log_file, unix_ns_to_secs, unix_time_ns, write_log_entry},
 };
 
 use super::{
     GeyserProvider, ProviderContext,
-    common::{TransactionAccumulator, fatal_connection_error},
+    common::{TransactionAccumulator, fatal_connection_error, timestamp_unix_ns},
     yellowstone_client::GeyserGrpcClient,
 };
 
@@ -144,8 +144,10 @@ async fn process_yellowstone_deshred_endpoint(
                     Some(Ok(msg)) => {
                         match msg.update_oneof {
                             Some(UpdateOneof::DeshredTransaction(tx_msg)) => {
-                                let wallclock = get_current_timestamp();
+                                let wallclock_unix_ns = unix_time_ns();
                                 let elapsed = start_instant.elapsed();
+                                let wallclock = unix_ns_to_secs(wallclock_unix_ns);
+                                let server_created_unix_ns = timestamp_unix_ns(msg.created_at.as_ref());
 
                                 let Some(signature) = deshred_signature(&tx_msg) else {
                                     warn!(endpoint = %endpoint_name, "Missing signature in deshred transaction");
@@ -158,9 +160,11 @@ async fn process_yellowstone_deshred_endpoint(
 
                                 let tx_data = TransactionData {
                                     wallclock_secs: wallclock,
+                                    wallclock_unix_ns,
                                     elapsed_since_start: elapsed,
                                     start_wallclock_secs,
                                     slot: Some(tx_msg.slot),
+                                    server_created_unix_ns,
                                 };
 
                                 let updated = accumulator.record(signature.clone(), tx_data.clone());
@@ -230,6 +234,7 @@ mod tests {
     use crate::proto::geyser::{
         SubscribeDeshredRequest, SubscribeUpdateDeshred, subscribe_update_deshred::UpdateOneof,
     };
+    use crate::providers::common::timestamp_unix_ns;
 
     const ACCOUNT: &str = "pAMMBay6oceH9fJKBRHGP5D4bD4sWpmSwMn52FMfXEA";
 
@@ -273,7 +278,7 @@ mod tests {
 
     /// Bytes laid out the way the fork plugin's hand-written `FilteredUpdateDeshred`
     /// encoder writes them: filters=1, deshred_transaction=2 {info=1 {signature=1}, slot=2},
-    /// ping=3 (empty), created_at=5.
+    /// ping=3 (empty), created_at=5 (always written, after the oneof).
     #[test]
     fn decodes_plugin_encoded_deshred_transaction_and_ping() {
         let signature = [7u8; 64];
@@ -283,10 +288,18 @@ mod tests {
         tx.extend(varint(123_456_789));
         let mut update = len_field(1, b"account");
         update.extend(len_field(2, &tx));
-        update.extend(len_field(5, &[]));
+        let created_at = prost_types::Timestamp {
+            seconds: 1_790_000_000,
+            nanos: 123_456_789,
+        };
+        update.extend(len_field(5, &created_at.encode_to_vec()));
 
         let decoded = SubscribeUpdateDeshred::decode(update.as_slice()).unwrap();
         assert_eq!(decoded.filters, vec!["account".to_string()]);
+        assert_eq!(
+            timestamp_unix_ns(decoded.created_at.as_ref()),
+            Some(1_790_000_000_123_456_789)
+        );
         let Some(UpdateOneof::DeshredTransaction(tx_msg)) = decoded.update_oneof else {
             panic!("expected deshred transaction");
         };

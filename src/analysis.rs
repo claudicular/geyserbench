@@ -890,9 +890,11 @@ mod tests {
     fn transaction(elapsed_ms: u64, slot: u64, historical: bool) -> TransactionData {
         TransactionData {
             wallclock_secs: if historical { 99.0 } else { 101.0 },
+            wallclock_unix_ns: if historical { 99 } else { 101 } * 1_000_000_000,
             elapsed_since_start: Duration::from_millis(elapsed_ms),
             start_wallclock_secs: 100.0,
             slot: Some(slot),
+            server_created_unix_ns: None,
         }
     }
 

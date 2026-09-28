@@ -16,9 +16,15 @@ use tracing::{info, warn};
 #[derive(Debug, Clone)]
 pub struct TransactionData {
     pub wallclock_secs: f64,
+    /// The same receive wallclock as `wallclock_secs`, as integer nanoseconds since the
+    /// Unix epoch. `f64` seconds resolve only ~240 ns at current epoch values.
+    pub wallclock_unix_ns: u64,
     pub elapsed_since_start: Duration,
     pub start_wallclock_secs: f64,
     pub slot: Option<u64>,
+    /// Server-side build time of the delivered message in nanoseconds since the Unix epoch
+    /// (Yellowstone `created_at`). `None` for providers without one.
+    pub server_created_unix_ns: Option<u64>,
 }
 
 /// Snapshot emitted when a signature has been observed by every endpoint.
@@ -170,36 +176,41 @@ impl ProgressTracker {
 pub const SIG_CSV_ENV: &str = "GEYSERBENCH_SIG_CSV";
 
 /// Writes every (endpoint, signature) observation held by the comparator as
-/// `endpoint,signature,slot,elapsed_ns,wallclock_secs`, sorted by signature then endpoint.
-/// `elapsed_ns` is the monotonic `elapsed_since_start` the comparator ranks by.
+/// `endpoint,signature,slot,elapsed_ns,wallclock_secs,wallclock_unix_ns,server_created_unix_ns`,
+/// sorted by signature then endpoint. `elapsed_ns` is the monotonic `elapsed_since_start` the
+/// comparator ranks by; `wallclock_secs` is printed exactly from `wallclock_unix_ns`.
 /// Called once after all providers finished, never on the receive path.
 pub fn write_signature_csv(comparator: &Comparator, path: &Path) -> std::io::Result<usize> {
-    let mut rows: Vec<(String, String, Option<u64>, u128, f64)> = Vec::new();
+    let mut rows: Vec<(String, String, TransactionData)> = Vec::new();
     for entry in comparator.iter() {
         for (endpoint, data) in entry.value() {
-            rows.push((
-                entry.key().clone(),
-                endpoint.clone(),
-                data.slot,
-                data.elapsed_since_start.as_nanos(),
-                data.wallclock_secs,
-            ));
+            rows.push((entry.key().clone(), endpoint.clone(), data.clone()));
         }
     }
     rows.sort_unstable_by(|a, b| a.0.cmp(&b.0).then_with(|| a.1.cmp(&b.1)));
 
     let mut out = BufWriter::new(File::create(path)?);
-    writeln!(out, "endpoint,signature,slot,elapsed_ns,wallclock_secs")?;
-    for (signature, endpoint, slot, elapsed_ns, wallclock_secs) in &rows {
-        let slot = slot.map(|slot| slot.to_string()).unwrap_or_default();
+    writeln!(
+        out,
+        "endpoint,signature,slot,elapsed_ns,wallclock_secs,wallclock_unix_ns,server_created_unix_ns"
+    )?;
+    for (signature, endpoint, data) in &rows {
+        let slot = data.slot.map(|slot| slot.to_string()).unwrap_or_default();
+        let server_created = data
+            .server_created_unix_ns
+            .map(|ns| ns.to_string())
+            .unwrap_or_default();
         writeln!(
             out,
-            "{},{},{},{},{:.6}",
+            "{},{},{},{},{}.{:09},{},{}",
             csv_field(endpoint),
             signature,
             slot,
-            elapsed_ns,
-            wallclock_secs
+            data.elapsed_since_start.as_nanos(),
+            data.wallclock_unix_ns / NANOS_PER_SEC,
+            data.wallclock_unix_ns % NANOS_PER_SEC,
+            data.wallclock_unix_ns,
+            server_created
         )?;
     }
     out.flush()?;
@@ -214,17 +225,26 @@ fn csv_field(value: &str) -> std::borrow::Cow<'_, str> {
     }
 }
 
+const NANOS_PER_SEC: u64 = 1_000_000_000;
+
 pub fn get_current_timestamp() -> f64 {
-    let now = SystemTime::now();
-    let since_epoch: Duration = match now.duration_since(UNIX_EPOCH) {
-        Ok(d) => d,
+    unix_ns_to_secs(unix_time_ns())
+}
+
+/// Current wallclock in nanoseconds since the Unix epoch, from one `SystemTime` read.
+pub fn unix_time_ns() -> u64 {
+    match SystemTime::now().duration_since(UNIX_EPOCH) {
+        Ok(since_epoch) => u64::try_from(since_epoch.as_nanos()).unwrap_or(u64::MAX),
         Err(e) => {
             // System clock went backwards; log and clamp to 0
             warn!("SystemTime error (clock skew): {}", e);
-            Duration::from_secs(0)
+            0
         }
-    };
-    since_epoch.as_secs_f64()
+    }
+}
+
+pub fn unix_ns_to_secs(unix_ns: u64) -> f64 {
+    unix_ns as f64 / NANOS_PER_SEC as f64
 }
 
 pub fn percentile(sorted_data: &[f64], p: f64) -> f64 {
@@ -277,12 +297,18 @@ mod tests {
     use super::{Comparator, TransactionData, write_signature_csv};
     use std::{collections::HashMap, time::Duration};
 
-    fn observation(elapsed_ns: u64, slot: Option<u64>) -> TransactionData {
+    fn observation(
+        elapsed_ns: u64,
+        slot: Option<u64>,
+        server_created_unix_ns: Option<u64>,
+    ) -> TransactionData {
         TransactionData {
             wallclock_secs: 1_790_000_000.25,
+            wallclock_unix_ns: 1_790_000_000_250_000_123,
             elapsed_since_start: Duration::from_nanos(elapsed_ns),
             start_wallclock_secs: 1_790_000_000.0,
             slot,
+            server_created_unix_ns,
         }
     }
 
@@ -292,13 +318,16 @@ mod tests {
         comparator.add_batch(
             "deshred",
             HashMap::from([
-                ("sigB".to_string(), observation(2_000, Some(11))),
-                ("sigA".to_string(), observation(1_500, Some(10))),
+                ("sigB".to_string(), observation(2_000, Some(11), None)),
+                (
+                    "sigA".to_string(),
+                    observation(1_500, Some(10), Some(1_790_000_000_249_000_007)),
+                ),
             ]),
         );
         comparator.add_batch(
             "grpc, \"fra\"",
-            HashMap::from([("sigA".to_string(), observation(9_000, None))]),
+            HashMap::from([("sigA".to_string(), observation(9_000, None, None))]),
         );
 
         let path = std::env::temp_dir().join(format!(
@@ -312,10 +341,10 @@ mod tests {
         assert_eq!(rows, 3);
         assert_eq!(
             content,
-            "endpoint,signature,slot,elapsed_ns,wallclock_secs\n\
-             deshred,sigA,10,1500,1790000000.250000\n\
-             \"grpc, \"\"fra\"\"\",sigA,,9000,1790000000.250000\n\
-             deshred,sigB,11,2000,1790000000.250000\n"
+            "endpoint,signature,slot,elapsed_ns,wallclock_secs,wallclock_unix_ns,server_created_unix_ns\n\
+             deshred,sigA,10,1500,1790000000.250000123,1790000000250000123,1790000000249000007\n\
+             \"grpc, \"\"fra\"\"\",sigA,,9000,1790000000.250000123,1790000000250000123,\n\
+             deshred,sigB,11,2000,1790000000.250000123,1790000000250000123,\n"
         );
     }
 }

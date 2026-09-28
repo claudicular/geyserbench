@@ -12,12 +12,12 @@ use crate::proto::geyser::{
 
 use crate::{
     config::{Config, Endpoint},
-    utils::{TransactionData, get_current_timestamp, open_log_file, write_log_entry},
+    utils::{TransactionData, open_log_file, unix_ns_to_secs, unix_time_ns, write_log_entry},
 };
 
 use super::{
     GeyserProvider, ProviderContext,
-    common::{TransactionAccumulator, fatal_connection_error},
+    common::{TransactionAccumulator, fatal_connection_error, timestamp_unix_ns},
     yellowstone_client::GeyserGrpcClient,
 };
 
@@ -134,8 +134,10 @@ async fn process_yellowstone_tx_accounts_endpoint(
                     Some(Ok(msg)) => {
                         match msg.update_oneof {
                             Some(UpdateOneof::TransactionAccounts(tx_msg)) => {
-                                let wallclock = get_current_timestamp();
+                                let wallclock_unix_ns = unix_time_ns();
                                 let elapsed = start_instant.elapsed();
+                                let wallclock = unix_ns_to_secs(wallclock_unix_ns);
+                                let server_created_unix_ns = timestamp_unix_ns(msg.created_at.as_ref());
                                 let signature = bs58::encode(tx_msg.signature).into_string();
 
                                 if signature.is_empty() {
@@ -149,9 +151,11 @@ async fn process_yellowstone_tx_accounts_endpoint(
 
                                 let tx_data = TransactionData {
                                     wallclock_secs: wallclock,
+                                    wallclock_unix_ns,
                                     elapsed_since_start: elapsed,
                                     start_wallclock_secs,
                                     slot: Some(tx_msg.slot),
+                                    server_created_unix_ns,
                                 };
 
                                 let updated = accumulator.record(signature.clone(), tx_data.clone());
@@ -221,6 +225,7 @@ mod tests {
         CommitmentLevel, SubscribeRequest, SubscribeRequestFilterTransactionAccounts,
         SubscribeUpdate, SubscribeUpdateTransactionAccounts, subscribe_update::UpdateOneof,
     };
+    use crate::providers::common::timestamp_unix_ns;
 
     /// Field 100, wire type 2 (length-delimited): varint(100 << 3 | 2) = varint(802).
     const FIELD_100_TAG: [u8; 2] = [0xA2, 0x06];
@@ -315,5 +320,41 @@ mod tests {
             decoded.update_oneof,
             Some(UpdateOneof::TransactionAccounts(ref tx)) if tx.slot == 42
         ));
+    }
+
+    /// The plugin's `FilteredUpdate` encoder writes the oneof first and then `created_at`
+    /// on field 11 (a Timestamp stamped when the message was built in the geyser callback).
+    #[test]
+    fn created_at_decodes_from_field_11() {
+        let update = SubscribeUpdate {
+            update_oneof: Some(UpdateOneof::TransactionAccounts(
+                SubscribeUpdateTransactionAccounts {
+                    signature: vec![7; 64],
+                    slot: 42,
+                    ..Default::default()
+                },
+            )),
+            ..Default::default()
+        };
+        let mut bytes = update.encode_to_vec();
+        let created_at = prost_types::Timestamp {
+            seconds: 1_790_000_000,
+            nanos: 5,
+        }
+        .encode_to_vec();
+        bytes.push(11 << 3 | 2);
+        bytes.push(created_at.len() as u8);
+        bytes.extend_from_slice(&created_at);
+        assert_eq!(top_level_fields(&bytes), vec![100, 11]);
+
+        let decoded = SubscribeUpdate::decode(bytes.as_slice()).unwrap();
+        assert!(matches!(
+            decoded.update_oneof,
+            Some(UpdateOneof::TransactionAccounts(ref tx)) if tx.slot == 42
+        ));
+        assert_eq!(
+            timestamp_unix_ns(decoded.created_at.as_ref()),
+            Some(1_790_000_000_000_000_005)
+        );
     }
 }

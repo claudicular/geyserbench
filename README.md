@@ -99,11 +99,13 @@ shmem_core = 12                     # optional, Linux only
 Set `GEYSERBENCH_SIG_CSV=/path/to/sigs.csv` to write every (endpoint, signature) observation after the run ends, one row each:
 
 ```
-endpoint,signature,slot,elapsed_ns,wallclock_secs
+endpoint,signature,slot,elapsed_ns,wallclock_secs,wallclock_unix_ns,server_created_unix_ns
 ```
 
 - `elapsed_ns` is the monotonic time since the run started, the value the comparator uses to rank endpoints. It is comparable across endpoints within one run.
-- `wallclock_secs` is the receive time in Unix seconds. For `influxdb` it is the logged stage timestamp.
+- `wallclock_unix_ns` is the receive time in nanoseconds since the Unix epoch. It is read from `SystemTime` immediately before the monotonic `elapsed_ns` stamp. For `influxdb` it is the logged stage timestamp (microsecond resolution).
+- `wallclock_secs` is the same value in Unix seconds, printed exactly with 9 decimals.
+- `server_created_unix_ns` is the Yellowstone plugin's `created_at` in nanoseconds since the Unix epoch, for `yellowstone`, `yellowstone_tx_accounts` and `yellowstone_deshred` rows. It is empty for other providers. The plugin stamps it with the validator host's wallclock when it builds the message inside the geyser callback (`SubscribeUpdate.created_at`, field 11; `SubscribeUpdateDeshred.created_at`, field 5). When the bench runs on the validator host, `wallclock_unix_ns - server_created_unix_ns` is the plugin's delivery time: filtering, queueing, encoding and gRPC transport. The time before the callback, inside agave, is not included. On a different host the difference also includes clock offset.
 - `slot` is empty for providers that do not report one (`thor`, `influxdb`).
 - The file holds each endpoint's earliest observation of every signature it saw, including signatures that other endpoints missed. Rows are sorted by signature, then endpoint.
 - The file is written once at the end of the run, including after a Ctrl+C. Nothing is written while providers are receiving.

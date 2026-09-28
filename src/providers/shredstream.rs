@@ -17,7 +17,7 @@ use crate::{
     config::{Config, Endpoint},
     entry_decode::{DecodeError, DecodedEntry, TransactionVersion, decode_entries},
     utils::{
-        Comparator, ProgressTracker, TransactionData, get_current_timestamp, open_log_file,
+        Comparator, ProgressTracker, TransactionData, open_log_file, unix_ns_to_secs, unix_time_ns,
         write_log_entry,
     },
 };
@@ -185,7 +185,7 @@ impl EntryObserver {
         slot: u64,
         decoded: Result<Vec<DecodedEntry>, DecodeError>,
     ) -> io::Result<()> {
-        let wallclock = get_current_timestamp();
+        let wallclock_unix_ns = unix_time_ns();
         let elapsed = self.start_instant.elapsed();
         self.batches += 1;
 
@@ -221,7 +221,7 @@ impl EntryObserver {
                 let Some(signature) = tx.signatures.first() else {
                     continue;
                 };
-                self.record(signature.to_string(), wallclock, elapsed, slot)?;
+                self.record(signature.to_string(), wallclock_unix_ns, elapsed, slot)?;
             }
         }
         Ok(())
@@ -230,10 +230,11 @@ impl EntryObserver {
     fn record(
         &mut self,
         signature: String,
-        wallclock: f64,
+        wallclock_unix_ns: u64,
         elapsed: Duration,
         slot: u64,
     ) -> io::Result<()> {
+        let wallclock = unix_ns_to_secs(wallclock_unix_ns);
         if let Some(file) = self.log_file.as_mut() {
             write_log_entry(file, wallclock, &self.endpoint_name, &signature)?;
         }
@@ -241,9 +242,11 @@ impl EntryObserver {
 
         let tx_data = TransactionData {
             wallclock_secs: wallclock,
+            wallclock_unix_ns,
             elapsed_since_start: elapsed,
             start_wallclock_secs: self.start_wallclock_secs,
             slot: Some(slot),
+            server_created_unix_ns: None,
         };
         let updated = self.accumulator.record(signature.clone(), tx_data.clone());
         if updated
