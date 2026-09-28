@@ -16,6 +16,7 @@ pub use {
 mod analysis;
 mod config;
 mod entry_decode;
+mod fastlane_ring;
 mod leader;
 mod proto;
 mod providers;

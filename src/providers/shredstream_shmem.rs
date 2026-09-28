@@ -166,7 +166,7 @@ fn run_ring_loop(
 }
 
 #[cfg(target_os = "linux")]
-fn pin_current_thread(core: usize) -> io::Result<()> {
+pub(super) fn pin_current_thread(core: usize) -> io::Result<()> {
     unsafe {
         let mut set: libc::cpu_set_t = std::mem::zeroed();
         libc::CPU_SET(core, &mut set);
@@ -178,7 +178,7 @@ fn pin_current_thread(core: usize) -> io::Result<()> {
 }
 
 #[cfg(not(target_os = "linux"))]
-fn pin_current_thread(_core: usize) -> io::Result<()> {
+pub(super) fn pin_current_thread(_core: usize) -> io::Result<()> {
     Err(io::Error::new(
         io::ErrorKind::Unsupported,
         "core pinning is only supported on Linux",

@@ -15,6 +15,7 @@ Supported endpoint kinds:
 - `thor`
 - `shredstream` (proxy gRPC entries)
 - `shredstream_shmem` (proxy shared-memory ring; `url` = ring path, optional `shmem_core`)
+- `fastlane_ring` (agave fast lane output ring; `url` = ring path, optional `shmem_core`; `config.account` matched as an owner, like `yellowstone_tx_accounts`)
 - `shreder`
 - `raiden_pulse`
 - `jetstream`
@@ -105,7 +106,7 @@ duration_secs = 3600                             # Optional: duration mode (see 
 [[endpoint]]
 name = "Provider Name"
 url = "https://endpoint.url:port"
-kind = "yellowstone"                             # yellowstone | yellowstone_tx_accounts | yellowstone_deshred | arpc | thor | shredstream | shredstream_shmem | shreder | raiden_pulse | jetstream | influxdb
+kind = "yellowstone"                             # yellowstone | yellowstone_tx_accounts | yellowstone_deshred | arpc | thor | shredstream | shredstream_shmem | fastlane_ring | shreder | raiden_pulse | jetstream | influxdb
 x_token = "optional-auth-token"
 
 # Optional: validator location input (see docs/validator-map.md)
@@ -170,7 +171,7 @@ layered, individually optional features make the bench leader/region aware:
 
 - `TransactionData` carries `slot: Option<u64>`. Providers that expose slot on
   the wire populate it: `yellowstone`, `yellowstone_tx_accounts`,
-  `yellowstone_deshred`, `shredstream`, `shredstream_shmem`, `shreder`, `raiden_pulse`, `jetstream`, `arpc`. `thor` and `influxdb` record
+  `yellowstone_deshred`, `shredstream`, `shredstream_shmem`, `fastlane_ring`, `shreder`, `raiden_pulse`, `jetstream`, `arpc`. `thor` and `influxdb` record
   `None`.
 - With `config.rpc_url` set, `LeaderResolver` (leader.rs) fetches
   `getEpochInfo` + `getLeaderSchedule` once per epoch (cached, arithmetic

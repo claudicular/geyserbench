@@ -13,7 +13,7 @@ Primary goal: find and validate optimizations and new features in those forks wi
 
 ## Project Overview
 
-GeyserBench is a Rust CLI benchmarking tool for Solana gRPC-compatible data feeds. It benchmarks multiple providers concurrently (`yellowstone`, `yellowstone_tx_accounts`, `yellowstone_deshred`, `arpc`, `thor`, `shredstream`, `shredstream_shmem`, `shreder`, `raiden_pulse`, `jetstream`, `influxdb`) and tracks:
+GeyserBench is a Rust CLI benchmarking tool for Solana gRPC-compatible data feeds. It benchmarks multiple providers concurrently (`yellowstone`, `yellowstone_tx_accounts`, `yellowstone_deshred`, `arpc`, `thor`, `shredstream`, `shredstream_shmem`, `fastlane_ring`, `shreder`, `raiden_pulse`, `jetstream`, `influxdb`) and tracks:
 
 - first-detection share
 - latency percentiles (P50/P95/P99)
@@ -112,7 +112,7 @@ commitment = "processed"  # processed | confirmed | finalized
 [[endpoint]]
 name = "Provider Name"
 url = "https://endpoint.url:port"
-kind = "yellowstone"      # yellowstone | yellowstone_tx_accounts | yellowstone_deshred | arpc | thor | shredstream | shredstream_shmem | shreder | raiden_pulse | jetstream | influxdb
+kind = "yellowstone"      # yellowstone | yellowstone_tx_accounts | yellowstone_deshred | arpc | thor | shredstream | shredstream_shmem | fastlane_ring | shreder | raiden_pulse | jetstream | influxdb
 x_token = "optional-auth-token"
 ```
 

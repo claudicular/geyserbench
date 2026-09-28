@@ -15,6 +15,7 @@ use crate::{
 
 pub mod arpc;
 pub mod common;
+pub mod fastlane_ring;
 pub mod influxdb;
 pub mod jetstream;
 pub mod raiden_pulse;
@@ -51,6 +52,7 @@ pub fn create_provider(kind: &EndpointKind) -> Box<dyn GeyserProvider> {
         EndpointKind::RaidenPulse => Box::new(raiden_pulse::RaidenPulseProvider),
         EndpointKind::Shredstream => Box::new(shredstream::ShredstreamProvider),
         EndpointKind::ShredstreamShmem => Box::new(shredstream_shmem::ShredstreamShmemProvider),
+        EndpointKind::FastlaneRing => Box::new(fastlane_ring::FastlaneRingProvider),
         EndpointKind::Jetstream => Box::new(jetstream::JetstreamProvider),
         EndpointKind::Influxdb => Box::new(influxdb::InfluxdbProvider),
     }

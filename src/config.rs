@@ -87,7 +87,7 @@ pub struct Endpoint {
     pub influx_bucket: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub influx_stage: Option<String>,
-    /// `shredstream_shmem` only: pin the ring-polling thread to this CPU (Linux).
+    /// `shredstream_shmem` and `fastlane_ring`: pin the ring-polling thread to this CPU (Linux).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub shmem_core: Option<usize>,
 }
@@ -105,6 +105,8 @@ pub enum EndpointKind {
     Shredstream,
     #[serde(rename = "shredstream_shmem")]
     ShredstreamShmem,
+    #[serde(rename = "fastlane_ring")]
+    FastlaneRing,
     Shreder,
     #[serde(rename = "raiden_pulse")]
     RaidenPulse,
@@ -151,6 +153,7 @@ impl EndpointKind {
             EndpointKind::Thor => "thor",
             EndpointKind::Shredstream => "shredstream",
             EndpointKind::ShredstreamShmem => "shredstream_shmem",
+            EndpointKind::FastlaneRing => "fastlane_ring",
             EndpointKind::Shreder => "shreder",
             EndpointKind::RaidenPulse => "raiden_pulse",
             EndpointKind::Jetstream => "jetstream",
@@ -292,5 +295,28 @@ mod tests {
         assert_eq!(config.endpoint[0].kind.as_str(), "shredstream_shmem");
         assert_eq!(config.endpoint[0].shmem_core, Some(12));
         assert_eq!(config.endpoint[1].shmem_core, None);
+    }
+
+    #[test]
+    fn parses_fastlane_ring_endpoint() {
+        let config: ConfigToml = toml::from_str(
+            r#"
+                [config]
+                transactions = 0
+                account = "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
+                commitment = "processed"
+
+                [[endpoint]]
+                name = "fastlane"
+                url = "/dev/shm/fastlane.out.ring"
+                kind = "fastlane_ring"
+                shmem_core = 35
+            "#,
+        )
+        .unwrap();
+
+        assert_eq!(config.endpoint[0].kind, EndpointKind::FastlaneRing);
+        assert_eq!(config.endpoint[0].kind.as_str(), "fastlane_ring");
+        assert_eq!(config.endpoint[0].shmem_core, Some(35));
     }
 }
